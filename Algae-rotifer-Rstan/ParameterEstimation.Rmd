@@ -1,0 +1,708 @@
+---
+title: "Bayesian parameter estimation of the algae-rotifer system"
+output: html_notebook
+---
+
+This is note book provides the R codes for estimating the parameter values in the Lotka-Volterra model
+by fitting it to the experimental data.
+
+## Estimating green algae parameters
+
+```{r estimating Cv, Cr,  and Cs mono culture with or without  salt}
+library(rstan)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(latex2exp)
+library(bayesplot)
+library(patchwork)
+
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+
+
+Plot_Logistic_bayes=function(df1, prey, NaCl, gname)
+{
+  # Read data
+  data=df1[df1$Species==prey & df1$NaCl==NaCl, ]
+
+  data$Mean=log10(data$Mean)# log10 transformation
+  nSamples = 9 # we have data from time 1 to 9 for each sample
+  y0 = data[data$Day==0, ]$Mean #fixed initial condition
+  t0 = 0.0
+  ts = unique(data[data$Day>0, ]$Day) # time point to evaluate; we omit day 0 becayse it is assume dfixed init condition
+  n_samples= 3 #we have three replicate in each condition
+  z=t(matrix(data[data$Day>0, ]$Mean, nrow=n_samples))  # data from day 1: column different samples
+  # 
+  fit= stan(file ="algae_logistic.stan",
+                        data = list (
+                             T  = nSamples,
+                             n_samples = n_samples,
+                             y0 = y0[1:n_samples],
+                             z  = z[,1:n_samples],
+                             t0 = t0,
+                             ts = ts),
+                         seed = 1,
+                         chains = 4,
+                         iter = 50000,
+                         warmup = 1000
+  )
+  print(fit, pars=c("theta"), probs=c(.05,.5,.95))
+  # few plots
+ 
+  g_r=mcmc_areas(fit,
+              pars = c("theta[1]"),
+              point_est='median',
+              prob = 0.95)+
+    ylab('r')+
+      theme_classic()+
+    theme(axis.text.x = element_text(size = 18),
+         axis.text.y = element_text(size = 0),
+         axis.title.x = element_text(size = '0'),
+         axis.title.y = element_text(size = 18),
+         legend.position =  "none" ) 
+  g_K=mcmc_areas(fit,
+              pars = c("theta[2]"),
+              point_est='median',
+              prob = 0.95)+
+    ylab('K')+
+      theme_classic()+
+    theme(axis.text.x = element_text(size = 18),
+         axis.text.y = element_text(size = 0),
+         axis.title.x = element_text(size = '0'),
+         axis.title.y = element_text(size = 18),
+         legend.position =  "none" ) 
+  
+  xdata =data.frame(cells = matrix(z, ncol=1),
+                      sample = as.vector(matrix(rep(1:n_samples,nSamples),
+                        nrow=nSamples,byrow=TRUE)),time = rep(ts,n_samples))
+  pred_df= as.data.frame(fit, pars = "z_pred") %>%
+    gather(factor_key = TRUE) %>%
+    group_by(key) %>%
+    summarize(lb = quantile(value, probs = 0.025),
+              median = quantile(value, probs = 0.5),
+              ub = quantile(value, probs = 0.975)) %>%
+    bind_cols(xdata)
+  pred_add=data.frame(key=c('z_pred[0,1]', 'z_pred[0,2]', 'z_pred[0,3]'),
+                      lb=y0, median=y0, ub=y0, cells=y0, sample=c(1,2,3), time=0)
+  pred_df=rbind(pred_add, pred_df)
+  
+  
+  
+  # plot observation data
+  g=ggplot(pred_df, aes(x = time, y = cells, color=as.factor(sample)))+geom_point() +
+      labs(x = "Time (day)", y = TeX("$\\log_{10}$ Cells (/ml)"))+
+    geom_line(aes(x = time, y = median)) +
+    geom_ribbon(aes(ymin = lb, ymax = ub), alpha = 0.1)+
+    facet_wrap(~factor(sample))+
+    theme_classic()+
+    theme(axis.text.x = element_text(size = 15),
+         axis.text.y = element_text(size = 12),
+         axis.title.x = element_text(size = '12'),
+         axis.title.y = element_text(size = 15),
+         legend.position =  "none" ) 
+
+  
+  (g_r+g_K)/g+plot_annotation(tag_levels = 'A')& 
+  theme(plot.tag = element_text(size = 24))
+  ggsave(gname)
+  return(fit)
+}
+#read data
+# test with Cv data without salt
+df_prey=read.csv('Prey _2024_Feb.csv') # mono-culture without salt
+df_prey$NaCl=0
+df_prey_salt=read.csv('Prey _2024_Feb - W__salt.csv') # mono-culture witht salt
+df_prey_salt$NaCl=0.06
+df1=rbind(df_prey, df_prey_salt)
+df1=df1[df1$Day<10, ]#Because some data lack at day 10, we only use data until day 9
+
+cv_control=Plot_Logistic_bayes(df1, prey='C. vulgaris', 0, "PreyDynamics_Cv0M_bayes.png") # Cv without salt
+cv_salt=Plot_Logistic_bayes(df1, prey='C. vulgaris', 0.06, "PreyDynamics_Cv006M_bayes.png") # Cv with salt
+cs_control=Plot_Logistic_bayes(df1, prey='C.sphaeroides', 0., "PreyDynamics_Cs0M_bayes.png") # Cs without salt
+cs_salt=Plot_Logistic_bayes(df1, prey='C.sphaeroides', 0.06, "PreyDynamics_Cs006M_bayes.png") # Cs without salt
+```
+
+
+## Estimating rotifers' mortality
+```{r Cv and rotifer without salt}
+library(deSolve)
+LV=function(t, x, parm){
+  with(as.list(c(x, parm)),{
+    dx1=r*x1*(1-x1/K)-a*x1*x2
+    dx2=x2*(b*a*x1-m)
+   return(list(c(dx1, dx2)))
+  })
+}
+
+
+
+# make it function below
+Prey_Predator_bayse1=function(df, prey, NaCl, algae_posterior, 
+                              fname, init_stan_file=0, priors=NaN)
+{
+  data=df[df$Prey==prey & df$NaCl==NaCl, ]
+  data$Predator.count=log10(data$Predator.count+1) # log transformation. Add one to avoid log 0
+  data$Algae.Mean=log10(data$Algae.Mean) # log transformation
+  
+  # get posterior distributions of algae parameters
+  posterior_samples = rstan::extract(algae_posterior)
+  r_samples = posterior_samples$theta[,1] # we use the median value
+  K_samples = posterior_samples$theta[,2] # we use the median value
+  
+  #prepare the parameter estimation
+  ts = unique(data[data$Day > 0, ]$Day) # time point to evaluate
+  samples = unique(data$Sample)
+  
+  for(i in 1:length(samples)){
+    prey0 = data[data$Day == 0& data$Sample==samples[i], ]$Algae.Mean  # init algae density
+    pred0 = data[data$Day == 0& data$Sample==samples[i], ]$Predator.count# init rotifer density
+    y0=c(prey0, pred0)
+    t0 = 0.0
+    prey_obs = data[data$Day > 0 & data$Sample==samples[i], ]$Algae.Mean
+    pred_obs = data[data$Day > 0 & data$Sample==samples[i], ]$Predator.count
+    #print(i)
+    if(i==1){
+      if(init_stan_file==0){
+         #  Perform stan
+        fit = stan(
+            file = "prey_predator.stan",
+            data = list(
+              T = length(ts), # total time point to observe
+              y0=y0, # initial condition
+              y= matrix(c(prey_obs,pred_obs), ncol=2), # observation
+              t0 = t0, # init time
+              ts = ts, # time points to observe
+              r = median(r_samples),
+              K = median(K_samples),
+              c = 1 # fixed parameter. arbitrary value to avoid the multicolinearity.
+            ),
+          seed = 1,
+          chains = 4,
+          iter = 50000,
+          warmup = 1000,
+          )
+      }else{
+         # use the posterior distribution of attack rate (without salt) as prior
+       # a_samples=rstan::extract(cv_pred_0M)$theta[,1]
+        a_samples=rstan::extract(priors)$theta[,1]
+          fit = stan(
+          file = "prey_predator2.stan",
+          data = list(
+            T = length(ts), 
+            y0=y0, 
+            y= matrix(c(prey_obs,pred_obs), ncol=2), 
+            t0 = t0, 
+            ts = ts, 
+            r = median(r_samples),
+            K = median(K_samples),
+            c = 1, # fixed parameter. arbitrary value to avoid the multicolinearity.
+            mean_a=mean(a_samples),
+            sd_a=sd(a_samples)
+          ),
+          seed = 1,
+          chains = 4,
+          iter = 50000,
+          warmup = 1000,
+    )
+        }
+      }
+    else
+      {
+        posterior_samples=rstan::extract(fit)
+        fit = stan(
+        file = "prey_predator_revewal.stan", # use different stan file to update posterior distribution
+        data = list(
+          T = length(ts), 
+          y0=y0, 
+          y= matrix(c(prey_obs,pred_obs), ncol=2), 
+          t0 = t0, 
+          ts = ts, 
+          r = median(r_samples),
+          K = median(K_samples),
+          c =1, 
+          a_mean = mean(posterior_samples$theta[,1]),
+          a_sd = sd(posterior_samples$theta[,1]),
+          m_mean = mean(posterior_samples$theta[,2]),
+          m_sd = sd(posterior_samples$theta[,2]),
+          sigma1_mean = mean(posterior_samples$sigma[,1]),
+          sigma1_sd = sd(posterior_samples$sigma[,1]),
+          sigma2_mean = mean(posterior_samples$sigma[,2]),
+          sigma2_sd = sd(posterior_samples$sigma[,2])
+        ),
+        seed = 1,
+        chains = 4,
+        iter = 50000,
+        warmup =1000,
+        )
+      }
+  }
+  # Posterior check
+  cv_pred_0M=fit
+  g_a=mcmc_areas(fit,point_est='median',
+                pars = c("theta[1]"),
+                prob = 0.95)+
+  ylab('a')+
+      theme_classic()+
+    theme(axis.text.x = element_text(size = 12),
+         axis.text.y = element_text(size = 0),
+         axis.title.x = element_text(size = 0),
+         axis.title.y = element_text(size = 18),
+         legend.position =  "none" ) 
+  g_m=mcmc_areas(fit,point_est='median',
+                pars = c("theta[2]"),
+                prob = 0.95)+
+    ylab('m')+
+      theme_classic()+
+    theme(axis.text.x = element_text(size = 12),
+         axis.text.y = element_text(size = 0),
+         axis.title.x = element_text(size = 0),
+         axis.title.y = element_text(size = 18),
+         legend.position =  "none" ) 
+  
+
+
+  #Posterior sampling
+  sample_n=1000
+  posterior_samples=rstan::extract(cv_pred_0M)
+  a_sample= sample(posterior_samples$theta[,1], sample_n)
+  m_sample= sample(posterior_samples$theta[,2], sample_n)
+  init=c(x1=mean(data[data$Day == 0, ]$Algae.Mean),
+         x2=mean(data[data$Day == 0, ]$Predator.count)
+  )
+  #Posterior sampling
+  for(i in 1:sample_n){
+    out=ode(y=init,times=unique(data$Day),func=LV,
+              parm=list(r=median(r_samples), K=median(K_samples), 
+                        a=a_sample[i], b=1,  m=m_sample[i]))
+    outdf_add=data.frame(out)
+    outdf_add$Sample=sprintf('Simulation%d',i)
+    if (i==1){
+       outdf=outdf_add
+    }else{
+      outdf=rbind(outdf, outdf_add)
+    }
+  }
+  df_exp=data.frame(time=data$Day, x1=data$Algae.Mean, 
+                    x2=data$Predator.count, Sample=data$Sample)
+  g1=ggplot(df_exp, aes(x=time, y=x1, color=Sample))+geom_line()+geom_point(size=2)+
+    xlab('Time (day)')+ylab(TeX(' $\\log_{10}$ Cells (/ml)'))+
+    scale_x_continuous(breaks=c(0,3,6,9))+
+    theme_classic()+
+    theme(axis.text.x = element_text(size = 12),
+          axis.text.y = element_text(size = 12),
+          axis.title.x = element_text(size = 18),
+          axis.title.y = element_text(size=18),
+          legend.position= 'none')+
+    geom_line(data=outdf, aes(x=time, y=x1,group=Sample), alpha=0.011, color='grey')
+  g2=ggplot(df_exp, aes(x=time, y=x2, color=Sample))+geom_line()+geom_point(size=2)+
+    xlab('Time (day)')+ylab(TeX(' $\\log_{10}$(Rotifers $+1$)  (/ml)'))+
+    scale_x_continuous(breaks=c(0,3,6,9))+
+    theme_classic()+
+    theme(axis.text.x = element_text(size = 12),
+          axis.text.y = element_text(size = 12),
+          axis.title.x = element_text(size = 18),
+          axis.title.y = element_text(size=18),
+          legend.position= 'none')+
+    geom_line(data=outdf, aes(x=time, y=x2,group=Sample), alpha=0.01, color='grey')
+    
+  g=g_a+g_m+g1+g2+plot_layout(ncol = 2)+plot_annotation(tag_levels = 'A')& 
+    theme(plot.tag = element_text(size = 24))
+  ggsave(fname)
+  return(fit)
+}
+df=read.csv('Prey_predator_experiment.csv')
+cv_predator_0M=Prey_Predator_bayse1(df,'C. vulgaris',  0, 
+                                    cv_control, 'Cv_prey-predator_0M.png')
+```
+
+```{r Cv and rotifer with salt}
+cv_predator_006M=Prey_Predator_bayse1(df,'C. vulgaris',  0.06, 
+                                    cv_control, 'Cv_prey-predator_006M.png',
+                                    1, cv_predator_0M)
+```
+
+```{r Comparison of the mortality of rotifers}
+df_diff=data.frame(a_cv=(rstan::extract(cv_predator_0M)$theta[,1]- rstan::extract(cv_predator_006M)$theta[,1])/rstan::extract(cv_predator_006M)$theta[,1],
+                  m_cv=(rstan::extract(cv_predator_0M)$theta[,2]- rstan::extract(cv_predator_006M)$theta[,2])/ rstan::extract(cv_predator_006M)$theta[,2]
+                   )
+a_density=density(df_diff$a_cv)
+m_density=density(df_diff$m_cv)
+
+density_a_df=data.frame(x=a_density$x, y=a_density$y)
+density_m_df=data.frame(x=m_density$x, y=m_density$y)
+
+lower_a = quantile(df_diff$a_cv, 0.025)
+median_a = quantile(df_diff$a_cv, 0.5)
+upper_a = quantile(df_diff$a_cv, 0.975)
+lower_m = quantile(df_diff$m_cv, 0.025)
+median_m = quantile(df_diff$m_cv, 0.5)
+upper_m = quantile(df_diff$m_cv, 0.975)
+g1=ggplot(density_a_df, aes(x=x, y=y))+
+   geom_area(fill='white')+
+  geom_area(data=subset(density_a_df, x>=lower_a & x<=upper_a), fill='skyblue')+
+  geom_line(color='black')+
+  geom_vline(xintercept=0, linetype='dashed')+
+  xlab(TeX("$(a_{1 1}-a_{1 2})/a_{1 2}$"))+
+  ylab("Density")+
+   annotate("text", x=lower_a,   y=3, size=8, label=round(lower_a,2)) +
+  annotate("text", x=upper_a, y=3, size=8, label=round(upper_a, 2))+
+  annotate("text", x=median_a, y=15, size=8, label=round(median_a, 2))+
+  theme_classic()+
+    theme(axis.text.x = element_text(size = 12),
+         axis.text.y = element_text(size = 12),
+         axis.title.x = element_text(size = 18),
+         axis.title.y = element_text(size = 18),
+         legend.position =  "none" ) 
+g2=ggplot(density_m_df, aes(x=x, y=y))+
+   geom_area(fill='white')+
+  geom_area(data=subset(density_m_df, x>=lower_m & x<=upper_m), fill='skyblue')+
+  geom_line(color='black')+
+  geom_vline(xintercept=0, linetype='dashed')+
+   xlab(TeX("$(m_{1}-m_{2})/m_{2}$"))+
+  ylab("Density")+
+  annotate("text", x=lower_m,   y=2, size=8, label=round(lower_m,2)) +
+  annotate("text", x=upper_m, y=2, size=8, label=round(upper_m, 2))+
+  annotate("text", x=median_m, y=6, size=8, label=round(median_m, 2))+
+  theme_classic()+
+    theme(axis.text.x = element_text(size = 12),
+         axis.text.y = element_text(size = 12),
+         axis.title.x = element_text(size = 18),
+         axis.title.y = element_text(size = 18),
+         legend.position =  "none" ) 
+
+g=g1/g2+plot_annotation(tag_levels = 'A')& 
+    theme(plot.tag = element_text(size = 24))
+  ggsave('Rotifer_mortality_diff.png')
+```
+
+## Estimating attack rates on Cv
+
+```{r  Cs and rotifer without salts}
+library(deSolve)
+LV=function(t, x, parm){
+  with(as.list(c(x, parm)),{
+    dx1=r*x1*(1-x1/K)-a*x1*x2
+    dx2=x2*(c*a*x1-m)
+   return(list(c(dx1, dx2)))
+  })
+}
+
+
+
+# make it function below
+Prey_Predator_bayse2=function(df, prey, NaCl, 
+                              algae_posterior, m_samples,
+                              fname, init_stan_file=0, priors=NaN){
+  data=df[df$Prey==prey & df$NaCl==NaCl, ]
+  data$Predator.count=log10(data$Predator.count+1) # log transformation. Add one to avoid log 0
+  data$Algae.Mean=log10(data$Algae.Mean) # log transformation
+  
+  # get posterior distributions of algae parameters
+  posterior_samples = rstan::extract(algae_posterior)
+  r_samples = posterior_samples$theta[,1] # we use the median value
+  K_samples = posterior_samples$theta[,2] # we use the median value
+  #prepare the parameter estimation
+  ts = unique(data[data$Day > 0, ]$Day) # time point to evaluate
+  samples = unique(data$Sample)
+  
+  for(i in 1:length(samples)){
+    prey0 = data[data$Day == 0& data$Sample==samples[i], ]$Algae.Mean  # init algae density
+    pred0 = data[data$Day == 0& data$Sample==samples[i], ]$Predator.count# init rotifer density
+    y0=c(prey0, pred0)
+    t0 = 0.0
+    prey_obs = data[data$Day > 0 & data$Sample==samples[i], ]$Algae.Mean
+    pred_obs = data[data$Day > 0 & data$Sample==samples[i], ]$Predator.count
+    #print(i)
+     if(i==1){
+    # Stan
+      if(init_stan_file==0){
+         fit = stan(
+        file = "prey_predator_fixed_m.stan",
+        data = list(
+          T = length(ts), 
+          y0=y0, 
+          y= matrix(c(prey_obs,pred_obs), ncol=2), 
+          t0 = t0, 
+          ts = ts,
+          r = median(r_samples),
+          K = median(K_samples),
+          m = median(m_samples)
+        ),
+        seed = 1,
+        chains = 4,
+        iter =50000,
+        warmup = 1000,
+      )
+      }else if(init_stan_file==1){
+         fit = stan(
+      file = "prey_predator_fixed_m_c.stan",
+      data = list(
+        T = length(ts), #
+        y0=y0, # 
+        y= matrix(c(prey_obs,pred_obs), ncol=2), # 
+        t0 = t0, 
+        ts = ts,
+        r = median(r_samples),
+        K = median(K_samples),
+        m = median(m_samples),
+      　mean_c = mean(rstan::extract(priors)$theta[,2]),
+        sd_c = sd(rstan::extract(priors)$theta[,2])
+      ),
+      seed = 1,
+      chains = 4,
+      iter = 50000,
+      warmup = 1000,
+    )
+      }else{
+        fit = stan(
+      file = "prey_predator_fixed_m_c_a.stan",
+      data = list(
+        T = length(ts), #
+        y0=y0, # 
+        y= matrix(c(prey_obs,pred_obs), ncol=2), # 
+        t0 = t0, 
+        ts = ts,
+        r = median(r_samples),
+        K = median(K_samples),
+        m = median(m_samples),
+      　mean_c = mean(rstan::extract(priors)$theta[,2]),
+        sd_c = sd(rstan::extract(priors)$theta[,2]),
+      　mean_a = mean(rstan::extract(priors)$theta[,1]),
+        sd_a = sd(rstan::extract(priors)$theta[,1])
+      ),
+      seed = 1,
+      chains = 4,
+      iter = 50000,
+      warmup = 1000,
+    )
+      }
+     
+    }
+  else
+  {
+    posterior_samples=rstan::extract(fit)
+    fit = stan(
+    file = "prey_predator_fixed_m_renewal.stan",
+    data = list(
+      T = length(ts), 
+      y0=y0, 
+      y= matrix(c(prey_obs,pred_obs), ncol=2), 
+      t0 = t0, 
+      ts = ts, 
+      r = median(r_samples),
+      K = median(K_samples),
+      m =median(m_samples), 
+      a_mean = mean(posterior_samples$theta[,1]),
+      a_sd = sd(posterior_samples$theta[,1]),
+      c_mean= mean(posterior_samples$theta[,2]),
+      c_sd= sd(posterior_samples$theta[,2]),
+      sigma1_mean = mean(posterior_samples$sigma[,1]),
+      sigma1_sd = sd(posterior_samples$sigma[,1]),
+      sigma2_mean = mean(posterior_samples$sigma[,2]),
+      sigma2_sd = sd(posterior_samples$sigma[,2])
+    ),
+    seed = 1,
+    chains = 4,
+    iter = 50000,
+    warmup =1000,
+    )
+  }
+  # Posterior check
+  cs_pred_0M=fit
+  g_a=mcmc_areas(fit,point_est='median',
+                pars = c("theta[1]"),
+                prob = 0.95)+
+  ylab('a')+
+      theme_classic()+
+    theme(axis.text.x = element_text(size = 12),
+         axis.text.y = element_text(size = 0),
+         axis.title.x = element_text(size = 0),
+         axis.title.y = element_text(size = 18),
+         legend.position =  "none" ) 
+  g_c=mcmc_areas(fit,point_est='median',
+                pars = c("theta[2]"),
+                prob = 0.95)+
+  ylab('c')+
+      theme_classic()+
+    theme(axis.text.x = element_text(size = 12),
+         axis.text.y = element_text(size = 0),
+         axis.title.x = element_text(size = 0),
+         axis.title.y = element_text(size = 18),
+         legend.position =  "none" ) 
+ 
+  
+  #Posterior sampling
+  sample_n=1000
+  posterior_samples=rstan::extract(cs_pred_0M)
+  a_sample= sample(posterior_samples$theta[,1], sample_n)
+  c_sample= sample(posterior_samples$theta[,2], sample_n)
+  init=c(x1=mean(data[data$Day == 0, ]$Algae.Mean),
+         x2=mean(data[data$Day == 0, ]$Predator.count)
+  )
+  #Posterior sampling
+  for(i in 1:sample_n){
+    out=ode(y=init,times=unique(data$Day),func=LV,
+              parm=list(r=median(r_samples), K=median(K_samples),  
+                        m =median(m_samples),
+                        a=a_sample[i],   c=c_sample[i]
+                    ))
+    outdf_add=data.frame(out)
+    outdf_add$Sample=sprintf('Simulation%d',i)
+    if (i==1){
+       outdf=outdf_add
+    }else{
+      outdf=rbind(outdf, outdf_add)
+    }
+  }
+  df_exp=data.frame(time=data$Day, x1=data$Algae.Mean, 
+                    x2=data$Predator.count, Sample=data$Sample)
+  g1=ggplot(df_exp, aes(x=time, y=x1, color=Sample))+geom_line()+geom_point(size=2)+
+    xlab('Time (day)')+ylab(TeX(' $\\log_{10}$ Cells (/ml)'))+
+    scale_x_continuous(breaks=c(0,3,6,9))+
+    theme_classic()+
+    theme(axis.text.x = element_text(size = 12),
+          axis.text.y = element_text(size = 12),
+          axis.title.x = element_text(size = 18),
+          axis.title.y = element_text(size=18),
+          legend.position= 'none')+
+    geom_line(data=outdf, aes(x=time, y=x1,group=Sample), alpha=0.011, color='grey')
+  g2=ggplot(df_exp, aes(x=time, y=x2, color=Sample))+geom_line()+geom_point(size=2)+
+    xlab('Time (day)')+ylab(TeX(' $\\log_{10}$(Rotifers $+1$)  (/ml)'))+
+    scale_x_continuous(breaks=c(0,3,6,9))+
+    theme_classic()+
+    theme(axis.text.x = element_text(size = 12),
+          axis.text.y = element_text(size = 12),
+          axis.title.x = element_text(size = 18),
+          axis.title.y = element_text(size=18),
+          legend.position= 'none')+
+    geom_line(data=outdf, aes(x=time, y=x2,group=Sample), alpha=0.01, color='grey')
+    
+  g=g_a+g_c+g1+g2+plot_layout(ncol = 2)+plot_annotation(tag_levels = 'A')& 
+    theme(plot.tag = element_text(size = 24))
+  ggsave(fname)
+  return(fit)
+  }
+}
+df=read.csv('Prey_predator_experiment.csv')
+cs_predator_0M=Prey_Predator_bayse2(df,'C.sphaeroides',  0, 
+                                    cs_control, rstan::extract(cv_predator_0M)$theta[,2],
+                                    'Cs_prey-predator_0M.png',
+                                    0)
+```
+
+
+```{r Cs and rotifer with  salt}
+cs_predator_006M=Prey_Predator_bayse2(df,'C.sphaeroides',  0.06, 
+                                    cs_salt, rstan::extract(cv_predator_006M)$theta[,2],
+                                    'Cs_prey-predator_006M.png', 0)
+
+```
+
+```{r Comparison of the attack rates on cs}
+
+df_diff=data.frame(
+  a_cv=(rstan::extract(cv_predator_0M)$theta[,1]-rstan::extract(cv_predator_006M)$theta[,1])/rstan::extract(cv_predator_006M)$theta[,1],
+  m_cv=(rstan::extract(cv_predator_0M)$theta[,2]- rstan::extract(cv_predator_006M)$theta[,2])/ rstan::extract(cv_predator_006M)$theta[,2],
+  a_cs= (rstan::extract(cs_predator_0M)$theta[,1]- rstan::extract(cs_predator_006M)$theta[,1])/rstan::extract(cs_predator_006M)$theta[,1],
+                   c_cs=(rstan::extract(cs_predator_0M)$theta[,2]- rstan::extract(cs_predator_006M)$theta[,2])/rstan::extract(cs_predator_006M)$theta[,2]
+                   )
+a_cs_density=density(df_diff$a_cs)
+c_cs_density=density(df_diff$c_cs)
+m_density=density(df_diff$m_cv)
+
+
+density_a_cs_df=data.frame(x=a_cs_density$x, y=a_cs_density$y)
+density_c_cs_df=data.frame(x=c_cs_density$x, y=c_cs_density$y)
+density_m_df=data.frame(x=m_density$x, y=m_density$y)
+
+lower_a = quantile(df_diff$a_cs, 0.05)
+median_a = quantile(df_diff$a_cs, 0.5)
+upper_a = quantile(df_diff$a_cs, 0.95)
+lower_c = quantile(df_diff$c_cs, 0.025)
+upper_c = quantile(df_diff$c_cs, 0.975)
+lower_m = quantile(df_diff$m_cv, 0.025)
+median_m = quantile(df_diff$m_cv, 0.5)
+upper_m = quantile(df_diff$m_cv, 0.975)
+g1=ggplot(density_a_cs_df, aes(x=x, y=y))+
+  geom_area(fill='white')+
+  geom_area(data=subset(density_a_cs_df, x>lower_a & x<upper_a), fill='skyblue')+
+  geom_line(color='black')+
+  geom_vline(xintercept=0, linetype='dashed')+
+  xlab(TeX("$(a_{2 1}-a_{2 2})/a_{2 2}$"))+
+  ylab("Density")+
+   annotate("text", x=lower_a,   y=1.5, size=4, label=round(lower_a,2)) +
+  annotate("text", x=upper_a, y=1.5, size=4, label=round(upper_a, 2))+
+  annotate("text", x=median_a, y=4, size=4, label=round(median_a, 2))+
+  theme_classic()+
+    theme(axis.text.x = element_text(size = 12),
+         axis.text.y = element_text(size = 12),
+         axis.title.x = element_text(size = 18),
+         axis.title.y = element_text(size = 18),
+         legend.position =  "none" ) 
+
+g2=ggplot(density_m_df, aes(x=x, y=y))+
+   geom_area(fill='white')+
+  geom_area(data=subset(density_m_df, x>=lower_m & x<=upper_m), fill='skyblue')+
+  geom_line(color='black')+
+  geom_vline(xintercept=0, linetype='dashed')+
+   xlab(TeX("$(m_{1}-m_{2})/m_{2}$"))+
+  ylab("Density")+
+  annotate("text", x=lower_m,   y=2, size=4, label=round(lower_m,2)) +
+  annotate("text", x=upper_m, y=2, size=4, label=round(upper_m, 2))+
+  annotate("text", x=median_m, y=6, size=4, label=round(median_m, 2))+
+  theme_classic()+
+    theme(axis.text.x = element_text(size = 12),
+         axis.text.y = element_text(size = 12),
+         axis.title.x = element_text(size = 18),
+         axis.title.y = element_text(size = 18),
+         legend.position =  "none" ) 
+
+
+df_exp=df[df$Prey=='C.sphaeroides', ]
+df_exp$Predator.count=df_exp$Predator.count+1
+cbbPalettet =c( "#E69F00", "#56B4E9", "#009E73", "#F0E442",  "#CC79A7", "#0072B2","#000000", "#D55E00")
+scientific_notation <- function(x) {
+     x <- format(x, scientific = TRUE)
+     x <- gsub("^(.*)e", "'\\1'e", x)
+     x <- gsub("e", "%*%10^", x)
+     x <- gsub('\\+', '', x)
+     parse(text = x)
+}
+
+g3=ggplot(df_exp, aes(x=Day, y=Algae.Mean, color=Sample))+geom_line()+
+  geom_point(aes(shape=factor(NaCl)), size=3)+
+  geom_errorbar(aes(ymin = Algae.Mean - Algae.SE, ymax = Algae.Mean + Algae.SE),
+                width = .1)+
+    xlab('Time (day)')+ylab('Green algae (cells/ml)')+
+  scale_y_continuous(trans='log10', label=scientific_notation)+
+    scale_x_continuous(breaks=c(0,3,6,9))+
+  scale_color_manual(values=cbbPalettet)+
+  guides(color='none')+
+    labs(shape='NaCl(M)')+
+    theme_classic()+
+    theme(axis.text.x = element_text(size = 12),
+          axis.text.y = element_text(size = 12),
+          axis.title.x = element_text(size = 18),
+          axis.title.y = element_text(size=18),
+         legend.position = 'top')
+  g4=ggplot(df_exp, aes(x=Day, y=Predator.count, color=Sample))+geom_line()+
+  geom_point(aes(shape=factor(NaCl)), size=3)+
+     scale_color_manual(values=cbbPalettet)+
+    xlab('Time (day)')+ylab('Rotifers (ind/ml)')+
+    scale_x_continuous(breaks=c(0,3,6,9))+
+    scale_y_continuous(trans='log10', breaks=c(1,2,11,101), labels=c(0,1,10,100))+
+    theme_classic()+
+    guides(color='none')+
+    labs(shape='NaCl(M)')+
+    theme(axis.text.x = element_text(size = 12),
+          axis.text.y = element_text(size = 12),
+          axis.title.x = element_text(size = 18),
+          axis.title.y = element_text(size=18),
+          legend.position = 'top')
+  
+g=g3+g4+g1+g2+plot_layout(ncol = 2)+plot_annotation(tag_levels = 'A')& 
+    theme(plot.tag = element_text(size = 24))
+ ggsave('Figure4.png', width=8, height=8)
+
+```

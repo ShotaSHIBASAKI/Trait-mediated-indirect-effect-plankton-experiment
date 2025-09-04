@@ -1,0 +1,427 @@
+---
+title: "Algae-Rotifer interaction analysis"
+output: html_notebook
+---
+
+This notebook provides the codes to analyze the data in Shibasaki and Yammamichi (2025).
+
+```{r Clump size comparaison}
+library(ggplot2)
+library(ARTool) # used for non-parametric two-way anova
+
+
+cbbPalette =c( "#E69F00", "#56B4E9", "#009E73", "#F0E442",  "#CC79A7", "#0072B2","#000000", "#D55E00")
+df_alone=read.csv('./ClumpSize/PreyClumpSize - None.csv')
+df_alone$Label=0
+df_salt=read.csv('./ClumpSize/PreyClumpSize - Salt.csv')
+df_salt$Label=2
+df_pred=read.csv('./ClumpSize/PreyClumpSize - Predator.csv')
+df_pred$Label=1
+df_both=read.csv('./ClumpSize/PreyClumpSize - PredatorSalt.csv')
+df_both$Label=3
+
+df_alone$Salt=FALSE
+df_alone$Predator=FALSE
+df_salt$Salt=TRUE
+df_salt$Predator=FALSE
+df_pred$Salt=FALSE
+df_pred$Predator=TRUE
+df_both$Salt=TRUE
+df_both$Predator=TRUE
+
+df=rbind(df_alone,  df_pred,df_salt, df_both)
+df[df$Prey=='Cv',]$Prey='Chlorella\n vulgaris'
+df[df$Prey=='Cr',]$Prey='Chlamydomonas\n reinhardtii'
+df[df$Prey=='Cs',]$Prey='Chlamydomonas\n sphaeroides'
+ggplot(data=df, aes(x=Prey, y=Clump, fill=factor(Label)))+geom_violin(scale='width')+
+  stat_summary(aes(group=interaction(Prey, Label)), fun = median,
+               geom = "point", size = 3, color = "black",
+               position = position_dodge(0.9)) +
+  scale_y_continuous(trans='log2', breaks = c(1,2,4,8,16,32))+
+   xlab('')+ylab('Clump size (cells)')+
+  scale_fill_manual(values=cbbPalette, name='Condition',
+                      labels=c('Control', 'Predator', 
+                               'Salt', 'Predator+Salt'))+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 15, face='italic'),
+        axis.text.y = element_text(size = 12),
+        axis.title.x = element_text(size = 'none'),
+        axis.title.y = element_text(size = 15),
+        ) 
+ggsave('Prey_ClumpSize.pdf', width=12)
+
+# Perform Aligned Rank Transform for Cs data
+df_cs=df[df$Prey=='Chlamydomonas\n sphaeroides',]
+art_model_cs=art(formula = Clump ~ Salt*Predator,  data = df_cs)
+model_cs =  anova(art_model_cs)# perform two way anova
+model_cs$eta.sq.part = with(model_cs, `Sum Sq`/(`Sum Sq` + `Sum Sq.res`)) # calculate effect size: partial eta-squared
+print(model_cs)
+
+df_cr=df[df$Prey=='Chlamydomonas\n reinhardtii',] # for Cr
+art_model_cr=art(formula = Clump ~ Salt*Predator,  data = df_cr)
+model_cr=  anova(art_model_cr)# perform two way anova
+model_cr$eta.sq.part = with(model_cr, `Sum Sq`/(`Sum Sq` + `Sum Sq.res`)) # calculate effect size: partial eta-squared
+print(model_cr)
+df_cv=df[df$Prey=='Chlorella\n vulgaris',]  # for Cv
+art_model_cv=art(formula = Clump ~ Salt*Predator,  data = df_cv)
+model_cv =  anova(art_model_cv)# perform two way anova
+model_cv$eta.sq.part = with(model_cv, `Sum Sq`/(`Sum Sq` + `Sum Sq.res`)) # calculate effect size: partial eta-squared
+print(model_cv)
+```
+
+```{r distribution of clump size after predation}
+library(ggplot2)
+library(lmerTest)
+library(patchwork)
+df=read.csv('./ClumpSize/N2242_ClumpSize_Salt_Predator.csv')
+df[df=='After']='6h'
+df[df=='Before']='0h'
+cbbPalette =c( "#E69F00", "#56B4E9", "#009E73", "#F0E442",  "#CC79A7", "#0072B2","#000000", "#D55E00")
+
+g1=ggplot(data=df[df$Condition=='Test',], aes(x=Sample, y=ClumpSize, fill=factor(Timing)))+
+  geom_violin(scale='count')+
+   stat_summary(aes(group=interaction(Sample, Timing)), fun = median,
+               geom = "point", size = 3, color = "black",
+               position = position_dodge(0.9)) +
+   scale_y_continuous(trans='log2', breaks = c(1,2,4,8,16,32))+
+    xlab('With predator')+ylab('Clump size (cells)')+
+   scale_fill_manual(values=c("#56B4E9",  "#F0E442"), name='',
+                       labels=c('0h', '6h'))+
+  scale_x_discrete(labels=c(1,2,3))+
+   theme_classic()+
+   theme(axis.text.x = element_text(size = 12),
+         axis.text.y = element_text(size = 12),
+         axis.title.x = element_text(size = 15),
+         axis.title.y = element_text(size = 15),
+         legend.position = 'none'
+         ) 
+g2=ggplot(data=df[df$Condition=='Control',], aes(x=Sample, y=ClumpSize, fill=factor(Timing)))+
+  geom_violin(scale='count')+
+   stat_summary(aes(group=interaction(Sample, Timing)), fun = median,
+               geom = "point", size = 3, color = "black",
+               position = position_dodge(0.9)) +
+   scale_y_continuous(trans='log2', breaks = c(1,2,4,8,16,32))+
+    xlab('Without predator')+ylab('Clump size (cells)')+
+   scale_fill_manual(values=c("#56B4E9",  "#F0E442"), name='',
+                       labels=c('0h', '6h'))+
+  scale_x_discrete(labels=c(1,2,3))+
+   theme_classic()+
+   theme(axis.text.x = element_text(size = 12),
+         axis.text.y = element_text(size = 12),
+         axis.title.x = element_text(size = 15),
+         axis.title.y = element_text(size = 0)
+         ) 
+g=g1+g2+plot_annotation(tag_levels = 'A')& 
+  theme(plot.tag = element_text(size = 36))
+ggsave('Figure3.pdf', height=6, width=8)
+   
+   
+# Stat with LMM
+
+df$log_Clump=log2(df$ClumpSize)
+df$log_Clump=log2(df$ClumpSize)
+model=lmer(log_Clump ~ Timing/Condition+ (1|Sample),data=df) # effect of timing would depend on the condition
+summary(model)
+```
+
+
+```{r results of evolutionary experiments}
+
+library(ggplot2)
+library(patchwork)
+library(latex2exp)
+scientific_notation <- function(x) {
+     x <- format(x, scientific = TRUE)
+     x <- gsub("^(.*)e", "'\\1'e", x)
+     x <- gsub("e", "%*%10^", x)
+     x <- gsub('\\+', '', x)
+     parse(text = x)
+}
+
+cbbPalette=c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2",  "#CC79A7", "#D55E00")
+
+df=read.csv("ExperimentalDataN2242 - CellCulture.csv")
+
+g1=ggplot(data=df, aes(x=Day, y=Density, group=ID))+
+  geom_point(size=3, aes(color=factor(NaCl),  shape=ID))+
+  geom_line(aes(color=factor(NaCl)))+
+  xlab('Time (d)')+
+  ylab('Cell density (/ml)')+
+  scale_color_manual(values = cbbPalette) +
+  scale_x_continuous(breaks=c(0, 7, 14, 21, 28, 35, 42, 49, 56, 63, 70,77,84, 91))+
+   scale_y_continuous(trans='log10', labels = scientific_notation,)+
+  scale_shape_manual(values=rep(c(15, 16, 17, 18, 4),2))+
+  guides(color=guide_legend(title="NaCl (M)"), shape='none')+
+   theme_classic()+
+  theme(axis.text.x = element_text(size = 16),
+          axis.text.y = element_text(size = 16),
+          axis.title.x = element_text(size = 0),
+          axis.title.y = element_text(size = 18)
+          )
+g2=ggplot(data=subset(df, !(is.na(df$MeanDiameter))), aes(x=Day, y=MeanDiameter, group=ID))+
+ geom_point(size=3, aes(color=factor(NaCl),  shape=ID))+
+  geom_line(aes(color=factor(NaCl)))+
+  xlab('Time (day)')+
+  ylab(TeX('Mean diameter ($\\mu m$)'))+
+  ylim(c(0,30))+
+   scale_color_manual(values = cbbPalette) +
+   scale_x_continuous(breaks=c(0, 7, 14, 21, 28, 35, 42, 49, 56, 63, 70, 77, 84, 91))+
+   scale_shape_manual(values=rep(c(15, 16, 17, 18, 4),2))+
+  guides(color='none', shape=guide_legend(title='Line'))+
+   theme_classic()+
+  theme(axis.text.x = element_text(size = 16),
+          axis.text.y = element_text(size = 16),
+          axis.title.x = element_text(size = 18),
+          axis.title.y = element_text(size = 18),
+        #legend.position = "none"
+          )
+
+g1/g2+plot_annotation(tag_levels = 'A')& 
+  theme(plot.tag = element_text(size = 24))
+  ggsave('Figure5.png', width=12, height=9)
+
+```
+```{r plasticity}
+library(ggplot2)
+library(patchwork)
+library(latex2exp)
+scientific_notation <- function(x) {
+     x <- format(x, scientific = TRUE)
+     x <- gsub("^(.*)e", "'\\1'e", x)
+     x <- gsub("e", "%*%10^", x)
+     x <- gsub('\\+', '', x)
+     parse(text = x)
+}
+cbbPalette=c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2",  "#CC79A7", "#D55E00")
+
+df=read.csv("ExperimentalDataN2242 - Plasticity.csv")
+
+ymax=32
+g1=ggplot(data=df[df$Day==7,], aes(x=Timing, y=MeanDiameter, group=ID))+
+  geom_point(size=3, aes(shape=ID, color=Timing))+
+  geom_line(color='gray')+
+  scale_color_manual(values = cbbPalette) +
+ scale_x_discrete(limit = c("After0", "Before", "After006"), labels=c("After (0M)", "Before", "After (0.06M)"))+
+ scale_shape_manual(values=c(15, 16, 17, 18, 4))+
+  ylab(TeX('Mean diameter ($\\mu m$)'))+
+  ylim(c(0,ymax))+
+  ggtitle('Day 7')+
+   theme_classic()+
+  theme(axis.text.x = element_text(size = 0),
+          axis.text.y = element_text(size = 16),
+          axis.title.x = element_text(size = 0),
+          axis.title.y = element_text(size = 18),
+        legend.position = "none",
+        plot.title    = element_text(size =18)
+          )
+g2=ggplot(data=df[df$Day==14,], aes(x=Timing, y=MeanDiameter, group=ID))+
+  geom_point(size=3, aes(shape=ID, color=Timing))+
+  geom_line(color='gray')+
+  scale_color_manual(values = cbbPalette) +
+ scale_x_discrete(limit = c("After0", "Before", "After006"), labels=c("After (0M)", "Before", "After (0.06M)"))+
+  scale_shape_manual(values=c(15, 16, 17, 18, 4))+
+  ylab(TeX('Mean diameter ($\\mu m$)'))+
+  ylim(c(0,ymax))+
+  ggtitle('Day 14')+
+   theme_classic()+
+  theme(axis.text.x = element_text(size = 18),
+          axis.text.y = element_text(size = 16),
+          axis.title.x = element_text(size = 0),
+          axis.title.y = element_text(size = 18),
+         legend.position = "none",
+         plot.title    = element_text(size =18)
+          )
+
+g3=ggplot(data=df[df$Day==21,], aes(x=Timing, y=MeanDiameter, group=ID))+
+  geom_point(size=3, aes(shape=ID, color=Timing))+
+  geom_line(color='gray')+
+  scale_color_manual(values = cbbPalette) +
+ scale_x_discrete(limit = c("After0", "Before", "After006"), labels=c("After (0M)", "Before", "After (0.06M)"))+
+   scale_shape_manual(values=c(15, 16, 17, 18, 4))+
+  ylab(TeX('Mean diameter ($\\mu m$)'))+
+  ylim(c(0,ymax))+
+  ggtitle('Day 21')+
+   theme_classic()+
+  theme(axis.text.x = element_text(size = 18),
+          axis.text.y = element_text(size = 16),
+          axis.title.x = element_text(size = 0),
+          axis.title.y = element_text(size = 18),
+         legend.position = "none",
+         plot.title    = element_text(size =18)
+          )
+g4=ggplot(data=df[df$Day==28,], aes(x=Timing, y=MeanDiameter, group=ID))+
+  geom_point(size=3, aes(shape=ID, color=Timing))+
+  geom_line(color='gray')+
+  scale_color_manual(values = cbbPalette) +
+  scale_shape_manual(values=c(15, 16, 17, 18, 4))+
+ scale_x_discrete(limit = c("After0", "Before", "After006"), labels=c("After (0M)", "Before", "After (0.06M)"))+
+  ylab(TeX('Mean diameter ($\\mu m$)'))+
+  ylim(c(0,ymax))+
+  ggtitle('Day 28')+
+   theme_classic()+
+  theme(axis.text.x = element_text(size = 18),
+          axis.text.y = element_text(size = 16),
+          axis.title.x = element_text(size = 0),
+          axis.title.y = element_text(size = 18),
+         legend.position = "none",
+         plot.title    = element_text(size =18)
+          )
+g5=ggplot(data=df[df$Day==35,], aes(x=Timing, y=MeanDiameter, group=ID))+
+  geom_point(size=3, aes(shape=ID, color=Timing))+
+  geom_line(color='gray')+
+  scale_color_manual(values = cbbPalette) +
+  scale_shape_manual(values=c(15, 16, 17, 18, 4))+
+ scale_x_discrete(limit = c("After0", "Before", "After006"), labels=c("After (0M)", "Before", "After (0.06M)"))+
+  ylab(TeX('Mean diameter ($\\mu m$)'))+
+  ylim(c(0,ymax))+
+  ggtitle('Day 35')+
+   theme_classic()+
+  theme(axis.text.x = element_text(size = 18),
+          axis.text.y = element_text(size = 16),
+          axis.title.x = element_text(size = 0),
+          axis.title.y = element_text(size = 18),
+         legend.position = "none",
+         plot.title    = element_text(size =18)
+          )
+g6=ggplot(data=df[df$Day==42,], aes(x=Timing, y=MeanDiameter, group=ID))+
+  geom_point(size=3, aes(shape=ID, color=Timing))+
+  geom_line(color='gray')+
+  scale_color_manual(values = cbbPalette) +
+  scale_shape_manual(values=c(15, 16, 17, 18, 4))+
+ scale_x_discrete(limit = c("After0", "Before", "After006"), labels=c("After (0M)", "Before", "After (0.06M)"))+
+  ylab(TeX('Mean diameter ($\\mu m$)'))+
+  ylim(c(0,ymax))+
+  ggtitle('Day 42')+
+   theme_classic()+
+  theme(axis.text.x = element_text(size = 18),
+          axis.text.y = element_text(size = 16),
+          axis.title.x = element_text(size = 0),
+          axis.title.y = element_text(size = 18),
+         legend.position = "none",
+         plot.title    = element_text(size =18)
+          )
+g7=ggplot(data=df[df$Day==49,], aes(x=Timing, y=MeanDiameter, group=ID))+
+  geom_point(size=3, aes(shape=ID, color=Timing))+
+  geom_line(color='gray')+
+  scale_color_manual(values = cbbPalette) +
+  scale_shape_manual(values=c(15, 16, 17, 18, 4))+
+ scale_x_discrete(limit = c("After0", "Before", "After006"), labels=c("After (0M)", "Before", "After (0.06M)"))+
+  ylab(TeX('Mean diameter ($\\mu m$)'))+
+  ylim(c(0,ymax))+
+  ggtitle('Day 49')+
+   theme_classic()+
+  theme(axis.text.x = element_text(size = 18),
+          axis.text.y = element_text(size = 16),
+          axis.title.x = element_text(size = 0),
+          axis.title.y = element_text(size = 18),
+         legend.position = "none",
+         plot.title    = element_text(size =18)
+          )
+g8=ggplot(data=df[df$Day==56,], aes(x=Timing, y=MeanDiameter, group=ID))+
+  geom_point(size=3, aes(shape=ID, color=Timing))+
+  geom_line(color='gray')+
+  scale_color_manual(values = cbbPalette) +
+  scale_shape_manual(values=c(15, 16, 17, 18, 4))+
+ scale_x_discrete(limit = c("After0", "Before", "After006"), labels=c("After (0M)", "Before", "After (0.06M)"))+
+  ylab(TeX('Mean diameter ($\\mu m$)'))+
+  ylim(c(0,ymax))+
+  ggtitle('Day 56')+
+   theme_classic()+
+  theme(axis.text.x = element_text(size = 18),
+          axis.text.y = element_text(size = 16),
+          axis.title.x = element_text(size = 0),
+          axis.title.y = element_text(size = 18),
+         legend.position = "none",
+         plot.title    = element_text(size =18)
+          )
+g9=ggplot(data=df[df$Day==63,], aes(x=Timing, y=MeanDiameter, group=ID))+
+  geom_point(size=3, aes(shape=ID, color=Timing))+
+  geom_line(color='gray')+
+  scale_color_manual(values = cbbPalette) +
+  scale_shape_manual(values=c(15, 16, 17, 18, 4))+
+ scale_x_discrete(limit = c("After0", "Before", "After006"), labels=c("After (0M)", "Before", "After (0.06M)"))+
+  ylab(TeX('Mean diameter ($\\mu m$)'))+
+  ylim(c(0,ymax))+
+  ggtitle('Day 63')+
+   theme_classic()+
+  theme(axis.text.x = element_text(size = 18),
+          axis.text.y = element_text(size = 16),
+          axis.title.x = element_text(size = 0),
+          axis.title.y = element_text(size = 18),
+         legend.position = "none",
+         plot.title    = element_text(size =18)
+          )
+g10=ggplot(data=df[df$Day==70,], aes(x=Timing, y=MeanDiameter, group=ID))+
+  geom_point(size=3, aes(shape=ID, color=Timing))+
+  geom_line(color='gray')+
+  scale_color_manual(values = cbbPalette) +
+  scale_shape_manual(values=c(15, 16, 17, 18, 4))+
+ scale_x_discrete(limit = c("After0", "Before", "After006"), labels=c("After (0M)", "Before", "After (0.06M)"))+
+  ylab(TeX('Mean diameter ($\\mu m$)'))+
+  ylim(c(0,ymax))+
+  ggtitle('Day 70')+
+   theme_classic()+
+  theme(axis.text.x = element_text(size = 18),
+          axis.text.y = element_text(size = 16),
+          axis.title.x = element_text(size = 0),
+          axis.title.y = element_text(size = 18),
+         legend.position = "none",
+         plot.title    = element_text(size =18)
+          )
+g11=ggplot(data=df[df$Day==77,], aes(x=Timing, y=MeanDiameter, group=ID))+
+  geom_point(size=3, aes(shape=ID, color=Timing))+
+  geom_line(color='gray')+
+  scale_color_manual(values = cbbPalette) +
+  scale_shape_manual(values=c(15, 16, 17, 18, 4))+
+ scale_x_discrete(limit = c("After0", "Before", "After006"), labels=c("After (0M)", "Before", "After (0.06M)"))+
+  ylab(TeX('Mean diameter ($\\mu m$)'))+
+  ylim(c(0,ymax))+
+  ggtitle('Day 77')+
+   theme_classic()+
+  theme(axis.text.x = element_text(size = 18),
+          axis.text.y = element_text(size = 16),
+          axis.title.x = element_text(size = 0),
+          axis.title.y = element_text(size = 18),
+         legend.position = "none",
+         plot.title    = element_text(size =18)
+          )
+g12=ggplot(data=df[df$Day==84,], aes(x=Timing, y=MeanDiameter, group=ID))+
+  geom_point(size=3, aes(shape=ID, color=Timing))+
+  geom_line(color='gray')+
+  scale_color_manual(values = cbbPalette) +
+  scale_shape_manual(values=c(15, 16, 17, 18, 4))+
+ scale_x_discrete(limit = c("After0", "Before", "After006"), labels=c("After (0M)", "Before", "After (0.06M)"))+
+  ylab(TeX('Mean diameter ($\\mu m$)'))+
+  ylim(c(0,ymax))+
+  ggtitle('Day 84')+
+   theme_classic()+
+  theme(axis.text.x = element_text(size = 18),
+          axis.text.y = element_text(size = 16),
+          axis.title.x = element_text(size = 0),
+          axis.title.y = element_text(size = 18),
+         legend.position = "none",
+         plot.title    = element_text(size =18)
+          )
+g13=ggplot(data=df[df$Day==91,], aes(x=Timing, y=MeanDiameter, group=ID))+
+  geom_point(size=3, aes(shape=ID, color=Timing))+
+  geom_line(color='gray')+
+  scale_color_manual(values = cbbPalette) +
+  scale_shape_manual(values=c(15, 16, 17, 18, 4))+
+ scale_x_discrete(limit = c("After0", "Before", "After006"), labels=c("After (0M)", "Before", "After (0.06M)"))+
+  ylab(TeX('Mean diameter ($\\mu m$)'))+
+  ylim(c(0,ymax))+
+  ggtitle('Day 91')+
+  guides(color='none')+
+   theme_classic()+
+  theme(axis.text.x = element_text(size = 18),
+          axis.text.y = element_text(size = 16),
+          axis.title.x = element_text(size = 0),
+          axis.title.y = element_text(size = 18),
+         legend.position = "bottom",
+         plot.title    = element_text(size =18)
+          )
+g=g1+g2+g3+g4+g5+g6+g7+g8+g9+g10+g11+g12+g13+plot_layout(ncol = 2, byrow = FALSE)
+ggsave('FigureS2.png', width=12, height=18)
+```
+
+For fitting results, please use ParameterEstimation.Rmd in Algae-Rotier-Rstan folder.
