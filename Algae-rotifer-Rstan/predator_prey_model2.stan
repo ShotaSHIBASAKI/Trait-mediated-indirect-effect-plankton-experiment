@@ -65,7 +65,7 @@ transformed parameters {
 
 model {
   log_m ~ normal(log(0.1), 1); // mortality rate wihtout salt would be low
-  log_a ~ normal(log(1.5), 0.25); // rough guess
+  log_a ~ normal(log(1), 0.5); // rough guess
   c_raw ~ normal(1.5, 0.2); //  rough approximation from Becks et al (2010)
   sigma ~ normal(0, 0.5); // half normal since sigma is positive
 

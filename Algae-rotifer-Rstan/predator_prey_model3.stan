@@ -61,7 +61,7 @@ transformed parameters {
 }
 
 model {
-  a_row ~ normal(0.8, 0.25); // attack rate would be  smaller than Cv. The mean is based on initial guess 
+  a_row ~ normal(0.6, 0.2); // attack rate would be  smaller than Cv. The mean is based on initial guess 
   c_raw ~ normal(1.7, 0.2); //  rough approximation from Becks et al (2010)
   log_m[1] ~ normal(m_mu[1], m_sigma[1]);
   log_m[2] ~ normal(m_mu[2], m_sigma[2]);
