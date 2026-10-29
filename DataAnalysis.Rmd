@@ -7,8 +7,9 @@ This notebook provides the codes to analyze the data in Shibasaki and Yammamichi
 
 ```{r Clump size comparaison}
 library(ggplot2)
-library(ARTool) # used for non-parametric two-way anova
-
+#library(ARTool) # used for non-parametric two-way anova
+library(dplyr)
+library(effectsize)
 
 cbbPalette =c( "#E69F00", "#56B4E9", "#009E73", "#F0E442",  "#CC79A7", "#0072B2","#000000", "#D55E00")
 df_alone=read.csv('./ClumpSize/PreyClumpSize - None.csv')
@@ -45,37 +46,125 @@ ggplot(data=df, aes(x=Prey, y=Clump, fill=factor(Label)))+geom_violin(scale='wid
   theme_classic()+
   theme(axis.text.x = element_text(size = 15, face='italic'),
         axis.text.y = element_text(size = 12),
-        axis.title.x = element_text(size = 'none'),
-        axis.title.y = element_text(size = 15),
+        axis.title.y = element_text(size = 15)
         ) 
 ggsave('Prey_ClumpSize.pdf', width=12)
 
-# Perform Aligned Rank Transform for Cs data
-df_cs=df[df$Prey=='Chlamydomonas\n sphaeroides',]
-art_model_cs=art(formula = Clump ~ Salt*Predator,  data = df_cs)
-model_cs =  anova(art_model_cs)# perform two way anova
-model_cs$eta.sq.part = with(model_cs, `Sum Sq`/(`Sum Sq` + `Sum Sq.res`)) # calculate effect size: partial eta-squared
-print(model_cs)
+ANOVA_table = function(df){
+  df_mean <- df %>%
+    group_by(Replicate, Label, Salt, Predator) %>%
+    summarise(
+      MeanValue = mean(log_Clump),
+      .groups = "drop"
+    )
+  res= aov(MeanValue ~ Salt*Predator, data=df_mean)
+  anova_tab <- summary(res)[[1]]
+  
+  anova_df <- data.frame(
+  Effect = rownames(anova_tab),
+  Df = anova_tab$Df,
+  SS = anova_tab$`Sum Sq`,
+  F = anova_tab$`F value`,
+  p = anova_tab$`Pr(>F)`
+  )
+　anova_df$Effect <- trimws(anova_df$Effect)
 
+  eta_df <- as.data.frame(eta_squared(res, partial = TRUE))
+
+  result_table <- anova_df %>%
+  left_join(
+    eta_df,
+    by = c("Effect" = "Parameter")
+    ) %>%
+    mutate(
+    SS = sprintf("%.3f", SS),
+    F = sprintf("%.3f", F),
+    p = sprintf("%.3e", p),
+    Eta2_partial = sprintf("%.3f", Eta2_partial)
+  )
+  print(summary(lm(MeanValue ~ Predator * Salt, df_mean)))
+
+return (result_table)
+
+}
+
+# Perform Two-way ANOVA
+print('-------- Chlamydomonas sphaeroides --------')
+df_cs=df[df$Prey=='Chlamydomonas\n sphaeroides',]
+df_cs$log_Clump = log2(df_cs$Clump)
+anova_cs = ANOVA_table(df_cs)
+print(anova_cs)
+
+print('-------- Chlamydomonas\n reinhardtii --------')
 df_cr=df[df$Prey=='Chlamydomonas\n reinhardtii',] # for Cr
-art_model_cr=art(formula = Clump ~ Salt*Predator,  data = df_cr)
-model_cr=  anova(art_model_cr)# perform two way anova
-model_cr$eta.sq.part = with(model_cr, `Sum Sq`/(`Sum Sq` + `Sum Sq.res`)) # calculate effect size: partial eta-squared
-print(model_cr)
+df_cr$log_Clump = log2(df_cr$Clump)
+anova_cr = ANOVA_table(df_cr)
+print(anova_cr)
+
+print('-------- Chlorella\n vulgaris --------')
 df_cv=df[df$Prey=='Chlorella\n vulgaris',]  # for Cv
-art_model_cv=art(formula = Clump ~ Salt*Predator,  data = df_cv)
-model_cv =  anova(art_model_cv)# perform two way anova
-model_cv$eta.sq.part = with(model_cv, `Sum Sq`/(`Sum Sq` + `Sum Sq.res`)) # calculate effect size: partial eta-squared
-print(model_cv)
+df_cv$log_Clump = log2(df_cv$Clump)
+anova_cv = ANOVA_table(df_cv)
+print(anova_cv)
+
+
 ```
 
 ```{r distribution of clump size after predation}
 library(ggplot2)
 library(lmerTest)
 library(patchwork)
+library(rstatix)
+library(dplyr)
+library(tidyr)
+
+Predation_change =　function(df, threshold=8){
+  df$ClumpClass = ifelse(df$ClumpSize > threshold,
+                        "L",
+                        "S")
+
+
+prop_df <- df %>%
+  group_by(Sample, Condition, Timing) %>%
+  summarise(
+    n_total = n(),
+    n_large = sum(ClumpClass == "L"),
+    prop_large = n_large / n_total,
+    log_odds_ratio = log(prop_large/(1-prop_large)),
+    .groups = "drop"
+  )
+
+  
+time = 6/24
+P_density =0.1
+
+effect_df <- prop_df %>%
+  select(Sample, Condition, Timing, prop_large) %>%
+  pivot_wider(
+    names_from  = Timing,
+    values_from = prop_large
+  ) %>%
+  mutate(
+    odds_before = Before / (1 - Before),
+    odds_after  = After  / (1 - After),
+
+    log_odds_ratio =
+      log(odds_after / odds_before),
+    estimated_diff_feeding =  log_odds_ratio/(P_density * time )
+  )
+print(effect_df)
+
+
+
+return (effect_df)
+}
+
 df=read.csv('./ClumpSize/N2242_ClumpSize_Salt_Predator.csv')
+effect_df = Predation_change(df, threshold=8)
 df[df=='After']='6h'
 df[df=='Before']='0h'
+prop_df[prop_df=='After']='6h'
+prop_df[prop_df=='Before']='0h'
 cbbPalette =c( "#E69F00", "#56B4E9", "#009E73", "#F0E442",  "#CC79A7", "#0072B2","#000000", "#D55E00")
 
 g1=ggplot(data=df[df$Condition=='Test',], aes(x=Sample, y=ClumpSize, fill=factor(Timing)))+
@@ -111,7 +200,32 @@ g2=ggplot(data=df[df$Condition=='Control',], aes(x=Sample, y=ClumpSize, fill=fac
          axis.title.x = element_text(size = 15),
          axis.title.y = element_text(size = 0)
          ) 
-g=g1+g2+plot_annotation(tag_levels = 'A')& 
+
+g3=  ggplot(
+  effect_df,
+  aes(x=Condition,
+    y=log_odds_ratio,,
+  )
+) +
+  geom_point(
+    size = 5,
+    color = "black",
+    stroke = 1.2
+  ) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray20") +
+  scale_shape_manual(values = c(21, 24)) +
+  guides(shape = "none") +
+    xlab('')+ylab('Log odds ratio')+
+  scale_x_discrete(labels  = c("Without predator",  "With predator"))+
+   theme_classic()+
+   theme(axis.text.x = element_text(size = 15),
+         axis.text.y = element_text(size = 12),
+         axis.title.x = element_text(size = 0),
+         axis.title.y = element_text(size = 15)
+         ) 
+
+
+g=(g1+g2)/g3+plot_annotation(tag_levels = 'A')& 
   theme(plot.tag = element_text(size = 36))
 ggsave('Figure3.pdf', height=6, width=8)
    
@@ -119,11 +233,16 @@ ggsave('Figure3.pdf', height=6, width=8)
 # Stat with LMM
 
 df$log_Clump=log2(df$ClumpSize)
-df$log_Clump=log2(df$ClumpSize)
-model=lmer(log_Clump ~ Timing/Condition+ (1|Sample),data=df) # effect of timing would depend on the condition
+ df_mean <- df %>%
+    group_by(Sample,Timing, Condition) %>%
+    summarise(
+      MeanValue = mean(log_Clump),
+      .groups = "drop"
+    )
+model=lmer(MeanValue ~ Timing/Condition+ (1|Sample),data=df_mean) # effect of timing would depend on the condition
+options(digits=8)
 summary(model)
 ```
-
 
 ```{r results of evolutionary experiments}
 
