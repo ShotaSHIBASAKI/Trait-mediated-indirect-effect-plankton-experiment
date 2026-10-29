@@ -198,12 +198,16 @@ cs_mono <- Plot_Logistic_bayes_shifted(df1, prey = 'C.sphaeroides', gname1 = "Pr
                                        scaling_parm =1e7)
 ```
 
-## Fitting to prey-predator dynamics (Cv)
-```{r fitting using hierarchy bayes}
+# Fitting to prey-predator dynamics (Cv)
+
+Model 1: mortality rate may change
+```{r Bayesian model of rotifer-CV new version 1}
 library(dplyr)
 library(tidyr)
 library(patchwork)
 library(ggplot2)
+library(loo)
+library(rstan)
 
 # Read the CSV file
 df <- read.csv("Prey_predator_experiment.csv")
@@ -271,8 +275,8 @@ stan_data <- list(
 )
 
 # Run Stan model
-fit <- stan(
-  file = "predator_prey_model2.stan",
+fit1 <- stan(
+  file = "predator_prey_model2_new1.stan",
   data = stan_data,
   seed = 1,
   chains = 4,
@@ -282,10 +286,727 @@ fit <- stan(
 )
  
  # Save fit object
- saveRDS(fit, file = "predator_prey_Cv_fit.rds")
+ saveRDS(fit1, file = "predator_prey_Cv_fit_new1.rds")
+ log_lik1 = extract_log_lik(fit1)
+ waic1= waic(log_lik1) # test
+
+
 ```
 
-```{r plotting the dynamics}
+Model 2 : mortality rate and conversion rate may change
+```{r Bayesian model of rotifer-CV new version 2}
+
+# Read the CSV file
+df <- read.csv("Prey_predator_experiment.csv")
+df <- df[df$Prey=='C. vulgaris',]
+df$Sample <- as.character(df$Sample)
+
+# Filter only Day >= 0
+df <- df %>% filter(Day >= 0)
+
+# Identify unique samples and time points
+samples <- unique(df$Sample)
+ts <- sort(unique(df$Day))[-1]
+T <- length(ts)
+N <- length(samples)
+
+# Initialize containers
+y0 <- matrix(NA, nrow=N, ncol=2)
+y <- array(NA, dim=c(N, T, 2))
+salt_vec <- numeric(N)
+prey_type_vec <- numeric(N)
+
+# Map prey types to numeric
+prey_map <- setNames(1:2, c("C. vulgaris", "C.sphaeroides"))
+
+# Loop through each sample
+# Construct y0 and y using df[df$Sample == i, ]
+scale_prey=c(1e8, 1e7)
+scale_pred=1e3
+avoid_zero=1e0
+for (i in seq_along(samples)) {
+  sub <- df[df$Sample == samples[i], ]
+  prey <- sub$Prey[1]
+  salt <- sub$NaCl[1]
+
+  prey_type_vec[i] <- ifelse(prey == "C. vulgaris", 1, 2)
+  salt_vec[i] <- ifelse(salt == 0, 1, 2)
+
+  y0[i, ] <- c(sub[sub$Day == 0, ]$Algae.Mean[1]/scale_prey[prey_type_vec[1]],
+               (sub[sub$Day == 0, ]$Predator.count[1]+avoid_zero)/scale_pred)
+
+  prey_obs <- sub[sub$Day > 0, ]$Algae.Mean/scale_prey[prey_type_vec[1]]
+  pred_obs <-( sub[sub$Day > 0, ]$Predator.count+avoid_zero)/scale_pred
+  y[i, , ] <- cbind(prey_obs, pred_obs)
+}
+
+# Use the median value of the posterior distribution for r and K
+cv_mono=readRDS("Cv_mono_fit.rds")
+cv_data=as.data.frame(cv_mono)
+
+
+r <- c(median(cv_data$mu_r), median(cv_data$mu_r)+median(cv_data$delta_r))
+K <- c(median(cv_data$mu_K), median(cv_data$mu_K)+median(cv_data$delta_K))
+
+# Prepare data list for Stan
+stan_data <- list(
+  N = N,
+  T = T,
+  salt = salt_vec,
+  prey_type = prey_type_vec,
+  y0 = y0,
+  y = y,
+  ts = ts,
+  r = r,
+  K = K
+)
+
+# Run Stan model
+fit2 <- stan(
+  file = "predator_prey_model2_new2.stan",
+  data = stan_data,
+  seed = 1,
+  chains = 4,
+  iter = 50000,
+  warmup =5000,
+  control = list(adapt_delta = 0.9)
+)
+ 
+ # Save fit object
+ saveRDS(fit2, file = "predator_prey_Cv_fit_new2.rds")
+ log_lik2 = extract_log_lik(fit2)
+ waic2= waic(log_lik2) # test
+
+
+```
+# Model 3: feeding rate and mortality rate may change
+```{r Bayesian model of rotifer-CV new version 3}
+
+# Read the CSV file
+df <- read.csv("Prey_predator_experiment.csv")
+df <- df[df$Prey=='C. vulgaris',]
+df$Sample <- as.character(df$Sample)
+
+# Filter only Day >= 0
+df <- df %>% filter(Day >= 0)
+
+# Identify unique samples and time points
+samples <- unique(df$Sample)
+ts <- sort(unique(df$Day))[-1]
+T <- length(ts)
+N <- length(samples)
+
+# Initialize containers
+y0 <- matrix(NA, nrow=N, ncol=2)
+y <- array(NA, dim=c(N, T, 2))
+salt_vec <- numeric(N)
+prey_type_vec <- numeric(N)
+
+# Map prey types to numeric
+prey_map <- setNames(1:2, c("C. vulgaris", "C.sphaeroides"))
+
+# Loop through each sample
+# Construct y0 and y using df[df$Sample == i, ]
+scale_prey=c(1e8, 1e7)
+scale_pred=1e3
+avoid_zero=1e0
+for (i in seq_along(samples)) {
+  sub <- df[df$Sample == samples[i], ]
+  prey <- sub$Prey[1]
+  salt <- sub$NaCl[1]
+
+  prey_type_vec[i] <- ifelse(prey == "C. vulgaris", 1, 2)
+  salt_vec[i] <- ifelse(salt == 0, 1, 2)
+
+  y0[i, ] <- c(sub[sub$Day == 0, ]$Algae.Mean[1]/scale_prey[prey_type_vec[1]],
+               (sub[sub$Day == 0, ]$Predator.count[1]+avoid_zero)/scale_pred)
+
+  prey_obs <- sub[sub$Day > 0, ]$Algae.Mean/scale_prey[prey_type_vec[1]]
+  pred_obs <-( sub[sub$Day > 0, ]$Predator.count+avoid_zero)/scale_pred
+  y[i, , ] <- cbind(prey_obs, pred_obs)
+}
+
+# Use the median value of the posterior distribution for r and K
+cv_mono=readRDS("Cv_mono_fit.rds")
+cv_data=as.data.frame(cv_mono)
+
+
+r <- c(median(cv_data$mu_r), median(cv_data$mu_r)+median(cv_data$delta_r))
+K <- c(median(cv_data$mu_K), median(cv_data$mu_K)+median(cv_data$delta_K))
+
+# Prepare data list for Stan
+stan_data <- list(
+  N = N,
+  T = T,
+  salt = salt_vec,
+  prey_type = prey_type_vec,
+  y0 = y0,
+  y = y,
+  ts = ts,
+  r = r,
+  K = K
+)
+
+# Run Stan model
+fit3 <- stan(
+  file = "predator_prey_model2_new3.stan",
+  data = stan_data,
+  seed = 1,
+  chains = 4,
+  iter = 50000,
+  warmup =5000,
+  control = list(adapt_delta = 0.9)
+)
+ 
+ # Save fit object
+ saveRDS(fit3, file = "predator_prey_Cv_fit_new3.rds")
+ log_lik3 = extract_log_lik(fit3)
+ waic3= waic(log_lik3) # test
+
+
+```
+# Model 4:conversion rate,  feeding rat,e and mortality rate may change
+```{r Bayesian model of rotifer-CV new version 4}
+
+# Read the CSV file
+df <- read.csv("Prey_predator_experiment.csv")
+df <- df[df$Prey=='C. vulgaris',]
+df$Sample <- as.character(df$Sample)
+
+# Filter only Day >= 0
+df <- df %>% filter(Day >= 0)
+
+# Identify unique samples and time points
+samples <- unique(df$Sample)
+ts <- sort(unique(df$Day))[-1]
+T <- length(ts)
+N <- length(samples)
+
+# Initialize containers
+y0 <- matrix(NA, nrow=N, ncol=2)
+y <- array(NA, dim=c(N, T, 2))
+salt_vec <- numeric(N)
+prey_type_vec <- numeric(N)
+
+# Map prey types to numeric
+prey_map <- setNames(1:2, c("C. vulgaris", "C.sphaeroides"))
+
+# Loop through each sample
+# Construct y0 and y using df[df$Sample == i, ]
+scale_prey=c(1e8, 1e7)
+scale_pred=1e3
+avoid_zero=1e0
+for (i in seq_along(samples)) {
+  sub <- df[df$Sample == samples[i], ]
+  prey <- sub$Prey[1]
+  salt <- sub$NaCl[1]
+
+  prey_type_vec[i] <- ifelse(prey == "C. vulgaris", 1, 2)
+  salt_vec[i] <- ifelse(salt == 0, 1, 2)
+
+  y0[i, ] <- c(sub[sub$Day == 0, ]$Algae.Mean[1]/scale_prey[prey_type_vec[1]],
+               (sub[sub$Day == 0, ]$Predator.count[1]+avoid_zero)/scale_pred)
+
+  prey_obs <- sub[sub$Day > 0, ]$Algae.Mean/scale_prey[prey_type_vec[1]]
+  pred_obs <-( sub[sub$Day > 0, ]$Predator.count+avoid_zero)/scale_pred
+  y[i, , ] <- cbind(prey_obs, pred_obs)
+}
+
+# Use the median value of the posterior distribution for r and K
+cv_mono=readRDS("Cv_mono_fit.rds")
+cv_data=as.data.frame(cv_mono)
+
+
+r <- c(median(cv_data$mu_r), median(cv_data$mu_r)+median(cv_data$delta_r))
+K <- c(median(cv_data$mu_K), median(cv_data$mu_K)+median(cv_data$delta_K))
+
+# Prepare data list for Stan
+stan_data <- list(
+  N = N,
+  T = T,
+  salt = salt_vec,
+  prey_type = prey_type_vec,
+  y0 = y0,
+  y = y,
+  ts = ts,
+  r = r,
+  K = K
+)
+
+# Run Stan model
+fit4 <- stan(
+  file = "predator_prey_model2_new4.stan",
+  data = stan_data,
+  seed = 1,
+  chains = 4,
+  iter = 50000,
+  warmup =5000,
+  control = list(adapt_delta = 0.9)
+)
+ 
+ # Save fit object
+ saveRDS(fit4, file = "predator_prey_Cv_fit_new4.rds")
+ log_lik4 = extract_log_lik(fit4)
+ waic4= waic(log_lik4) # test
+
+
+```
+
+# Model 5:conversion rate may change
+```{r Bayesian model of rotifer-CV new version 5}
+
+# Read the CSV file
+df <- read.csv("Prey_predator_experiment.csv")
+df <- df[df$Prey=='C. vulgaris',]
+df$Sample <- as.character(df$Sample)
+
+# Filter only Day >= 0
+df <- df %>% filter(Day >= 0)
+
+# Identify unique samples and time points
+samples <- unique(df$Sample)
+ts <- sort(unique(df$Day))[-1]
+T <- length(ts)
+N <- length(samples)
+
+# Initialize containers
+y0 <- matrix(NA, nrow=N, ncol=2)
+y <- array(NA, dim=c(N, T, 2))
+salt_vec <- numeric(N)
+prey_type_vec <- numeric(N)
+
+# Map prey types to numeric
+prey_map <- setNames(1:2, c("C. vulgaris", "C.sphaeroides"))
+
+# Loop through each sample
+# Construct y0 and y using df[df$Sample == i, ]
+scale_prey=c(1e8, 1e7)
+scale_pred=1e3
+avoid_zero=1e0
+for (i in seq_along(samples)) {
+  sub <- df[df$Sample == samples[i], ]
+  prey <- sub$Prey[1]
+  salt <- sub$NaCl[1]
+
+  prey_type_vec[i] <- ifelse(prey == "C. vulgaris", 1, 2)
+  salt_vec[i] <- ifelse(salt == 0, 1, 2)
+
+  y0[i, ] <- c(sub[sub$Day == 0, ]$Algae.Mean[1]/scale_prey[prey_type_vec[1]],
+               (sub[sub$Day == 0, ]$Predator.count[1]+avoid_zero)/scale_pred)
+
+  prey_obs <- sub[sub$Day > 0, ]$Algae.Mean/scale_prey[prey_type_vec[1]]
+  pred_obs <-( sub[sub$Day > 0, ]$Predator.count+avoid_zero)/scale_pred
+  y[i, , ] <- cbind(prey_obs, pred_obs)
+}
+
+# Use the median value of the posterior distribution for r and K
+cv_mono=readRDS("Cv_mono_fit.rds")
+cv_data=as.data.frame(cv_mono)
+
+
+r <- c(median(cv_data$mu_r), median(cv_data$mu_r)+median(cv_data$delta_r))
+K <- c(median(cv_data$mu_K), median(cv_data$mu_K)+median(cv_data$delta_K))
+
+# Prepare data list for Stan
+stan_data <- list(
+  N = N,
+  T = T,
+  salt = salt_vec,
+  prey_type = prey_type_vec,
+  y0 = y0,
+  y = y,
+  ts = ts,
+  r = r,
+  K = K
+)
+
+# Run Stan model
+fit5 <- stan(
+  file = "predator_prey_model2_new5.stan",
+  data = stan_data,
+  seed = 1,
+  chains = 4,
+  iter = 50000,
+  warmup =5000,
+  control = list(adapt_delta = 0.9)
+)
+ 
+ # Save fit object
+ saveRDS(fit5, file = "predator_prey_Cv_fit_new5.rds")
+ log_lik5 = extract_log_lik(fit5)
+ waic5= waic(log_lik5) # test
+
+
+```
+## Model 6:feeding rate may change
+```{r Bayesian model of rotifer-CV new version 6}
+
+# Read the CSV file
+df <- read.csv("Prey_predator_experiment.csv")
+df <- df[df$Prey=='C. vulgaris',]
+df$Sample <- as.character(df$Sample)
+
+# Filter only Day >= 0
+df <- df %>% filter(Day >= 0)
+
+# Identify unique samples and time points
+samples <- unique(df$Sample)
+ts <- sort(unique(df$Day))[-1]
+T <- length(ts)
+N <- length(samples)
+
+# Initialize containers
+y0 <- matrix(NA, nrow=N, ncol=2)
+y <- array(NA, dim=c(N, T, 2))
+salt_vec <- numeric(N)
+prey_type_vec <- numeric(N)
+
+# Map prey types to numeric
+prey_map <- setNames(1:2, c("C. vulgaris", "C.sphaeroides"))
+
+# Loop through each sample
+# Construct y0 and y using df[df$Sample == i, ]
+scale_prey=c(1e8, 1e7)
+scale_pred=1e3
+avoid_zero=1e0
+for (i in seq_along(samples)) {
+  sub <- df[df$Sample == samples[i], ]
+  prey <- sub$Prey[1]
+  salt <- sub$NaCl[1]
+
+  prey_type_vec[i] <- ifelse(prey == "C. vulgaris", 1, 2)
+  salt_vec[i] <- ifelse(salt == 0, 1, 2)
+
+  y0[i, ] <- c(sub[sub$Day == 0, ]$Algae.Mean[1]/scale_prey[prey_type_vec[1]],
+               (sub[sub$Day == 0, ]$Predator.count[1]+avoid_zero)/scale_pred)
+
+  prey_obs <- sub[sub$Day > 0, ]$Algae.Mean/scale_prey[prey_type_vec[1]]
+  pred_obs <-( sub[sub$Day > 0, ]$Predator.count+avoid_zero)/scale_pred
+  y[i, , ] <- cbind(prey_obs, pred_obs)
+}
+
+# Use the median value of the posterior distribution for r and K
+cv_mono=readRDS("Cv_mono_fit.rds")
+cv_data=as.data.frame(cv_mono)
+
+
+r <- c(median(cv_data$mu_r), median(cv_data$mu_r)+median(cv_data$delta_r))
+K <- c(median(cv_data$mu_K), median(cv_data$mu_K)+median(cv_data$delta_K))
+
+# Prepare data list for Stan
+stan_data <- list(
+  N = N,
+  T = T,
+  salt = salt_vec,
+  prey_type = prey_type_vec,
+  y0 = y0,
+  y = y,
+  ts = ts,
+  r = r,
+  K = K
+)
+
+# Run Stan model
+fit6 <- stan(
+  file = "predator_prey_model2_new6.stan",
+  data = stan_data,
+  seed = 1,
+  chains = 4,
+  iter = 50000,
+  warmup =5000,
+  control = list(adapt_delta = 0.9)
+)
+ 
+ # Save fit object
+ saveRDS(fit6, file = "predator_prey_Cv_fit_new6.rds")
+ log_lik6 = extract_log_lik(fit6)
+ waic6= waic(log_lik6) # test
+```
+
+## Model 7: conversion rate and feeding rate may change
+```{r Bayesian model of rotifer-CV new version 7}
+
+# Read the CSV file
+df <- read.csv("Prey_predator_experiment.csv")
+df <- df[df$Prey=='C. vulgaris',]
+df$Sample <- as.character(df$Sample)
+
+# Filter only Day >= 0
+df <- df %>% filter(Day >= 0)
+
+# Identify unique samples and time points
+samples <- unique(df$Sample)
+ts <- sort(unique(df$Day))[-1]
+T <- length(ts)
+N <- length(samples)
+
+# Initialize containers
+y0 <- matrix(NA, nrow=N, ncol=2)
+y <- array(NA, dim=c(N, T, 2))
+salt_vec <- numeric(N)
+prey_type_vec <- numeric(N)
+
+# Map prey types to numeric
+prey_map <- setNames(1:2, c("C. vulgaris", "C.sphaeroides"))
+
+# Loop through each sample
+# Construct y0 and y using df[df$Sample == i, ]
+scale_prey=c(1e8, 1e7)
+scale_pred=1e3
+avoid_zero=1e0
+for (i in seq_along(samples)) {
+  sub <- df[df$Sample == samples[i], ]
+  prey <- sub$Prey[1]
+  salt <- sub$NaCl[1]
+
+  prey_type_vec[i] <- ifelse(prey == "C. vulgaris", 1, 2)
+  salt_vec[i] <- ifelse(salt == 0, 1, 2)
+
+  y0[i, ] <- c(sub[sub$Day == 0, ]$Algae.Mean[1]/scale_prey[prey_type_vec[1]],
+               (sub[sub$Day == 0, ]$Predator.count[1]+avoid_zero)/scale_pred)
+
+  prey_obs <- sub[sub$Day > 0, ]$Algae.Mean/scale_prey[prey_type_vec[1]]
+  pred_obs <-( sub[sub$Day > 0, ]$Predator.count+avoid_zero)/scale_pred
+  y[i, , ] <- cbind(prey_obs, pred_obs)
+}
+
+# Use the median value of the posterior distribution for r and K
+cv_mono=readRDS("Cv_mono_fit.rds")
+cv_data=as.data.frame(cv_mono)
+
+
+r <- c(median(cv_data$mu_r), median(cv_data$mu_r)+median(cv_data$delta_r))
+K <- c(median(cv_data$mu_K), median(cv_data$mu_K)+median(cv_data$delta_K))
+
+# Prepare data list for Stan
+stan_data <- list(
+  N = N,
+  T = T,
+  salt = salt_vec,
+  prey_type = prey_type_vec,
+  y0 = y0,
+  y = y,
+  ts = ts,
+  r = r,
+  K = K
+)
+
+# Run Stan model
+fit7 <- stan(
+  file = "predator_prey_model2_new7.stan",
+  data = stan_data,
+  seed = 1,
+  chains = 4,
+  iter = 50000,
+  warmup =5000,
+  control = list(adapt_delta = 0.9)
+)
+ 
+ # Save fit object
+ saveRDS(fit7, file = "predator_prey_Cv_fit_new7.rds")
+ log_lik7 = extract_log_lik(fit7)
+ waic7= waic(log_lik7) # test
+```
+
+## Model 8: No change
+```{r Bayesian model of rotifer-CV new version 8}
+
+# Read the CSV file
+df <- read.csv("Prey_predator_experiment.csv")
+df <- df[df$Prey=='C. vulgaris',]
+df$Sample <- as.character(df$Sample)
+
+# Filter only Day >= 0
+df <- df %>% filter(Day >= 0)
+
+# Identify unique samples and time points
+samples <- unique(df$Sample)
+ts <- sort(unique(df$Day))[-1]
+T <- length(ts)
+N <- length(samples)
+
+# Initialize containers
+y0 <- matrix(NA, nrow=N, ncol=2)
+y <- array(NA, dim=c(N, T, 2))
+salt_vec <- numeric(N)
+prey_type_vec <- numeric(N)
+
+# Map prey types to numeric
+prey_map <- setNames(1:2, c("C. vulgaris", "C.sphaeroides"))
+
+# Loop through each sample
+# Construct y0 and y using df[df$Sample == i, ]
+scale_prey=c(1e8, 1e7)
+scale_pred=1e3
+avoid_zero=1e0
+for (i in seq_along(samples)) {
+  sub <- df[df$Sample == samples[i], ]
+  prey <- sub$Prey[1]
+  salt <- sub$NaCl[1]
+
+  prey_type_vec[i] <- ifelse(prey == "C. vulgaris", 1, 2)
+  salt_vec[i] <- ifelse(salt == 0, 1, 2)
+
+  y0[i, ] <- c(sub[sub$Day == 0, ]$Algae.Mean[1]/scale_prey[prey_type_vec[1]],
+               (sub[sub$Day == 0, ]$Predator.count[1]+avoid_zero)/scale_pred)
+
+  prey_obs <- sub[sub$Day > 0, ]$Algae.Mean/scale_prey[prey_type_vec[1]]
+  pred_obs <-( sub[sub$Day > 0, ]$Predator.count+avoid_zero)/scale_pred
+  y[i, , ] <- cbind(prey_obs, pred_obs)
+}
+
+# Use the median value of the posterior distribution for r and K
+cv_mono=readRDS("Cv_mono_fit.rds")
+cv_data=as.data.frame(cv_mono)
+
+
+r <- c(median(cv_data$mu_r), median(cv_data$mu_r)+median(cv_data$delta_r))
+K <- c(median(cv_data$mu_K), median(cv_data$mu_K)+median(cv_data$delta_K))
+
+# Prepare data list for Stan
+stan_data <- list(
+  N = N,
+  T = T,
+  salt = salt_vec,
+  prey_type = prey_type_vec,
+  y0 = y0,
+  y = y,
+  ts = ts,
+  r = r,
+  K = K
+)
+
+# Run Stan model
+fit8 <- stan(
+  file = "predator_prey_model2_new8.stan",
+  data = stan_data,
+  seed = 1,
+  chains = 4,
+  iter = 50000,
+  warmup =5000,
+  control = list(adapt_delta = 0.9)
+)
+ 
+ # Save fit object
+ saveRDS(fit8, file = "predator_prey_Cv_fit_new8.rds")
+ log_lik8 = extract_log_lik(fit8)
+ waic8= waic(log_lik8) # test
+```
+
+## Model comparison
+
+
+```{r read rds data}
+fit1=readRDS("predator_prey_Cv_fit_new1.rds")
+log_lik1 = extract_log_lik(fit1)
+waic1= waic(log_lik1)
+post1 =  rstan::extract(fit1)
+fit2=readRDS("predator_prey_Cv_fit_new2.rds")
+log_lik2 = extract_log_lik(fit2)
+waic2= waic(log_lik2)
+post2 =  rstan::extract(fit2)
+fit3=readRDS("predator_prey_Cv_fit_new3.rds")
+log_lik3 = extract_log_lik(fit3)
+waic3= waic(log_lik3)
+post3 =  rstan::extract(fit3)
+fit4=readRDS("predator_prey_Cv_fit_new4.rds")
+log_lik4 = extract_log_lik(fit4)
+waic4= waic(log_lik4)
+post4 =  rstan::extract(fit4)
+fit5=readRDS("predator_prey_Cv_fit_new5.rds")
+log_lik5 = extract_log_lik(fit5)
+waic5= waic(log_lik5)
+post5 =  rstan::extract(fit5)
+fit6=readRDS("predator_prey_Cv_fit_new6.rds")
+log_lik6 = extract_log_lik(fit6)
+waic6= waic(log_lik6)
+post6 =  rstan::extract(fit6)
+fit7=readRDS("predator_prey_Cv_fit_new7.rds")
+log_lik7 = extract_log_lik(fit7)
+waic7= waic(log_lik7)
+post7 =  rstan::extract(fit7)
+fit8=readRDS("predator_prey_Cv_fit_new8.rds")
+log_lik8 = extract_log_lik(fit8)
+waic8= waic(log_lik8)
+post8 =  rstan::extract(fit8)
+```
+
+```{r Model comparison with rotifer-Cv new}
+comp <- as.data.frame(
+  loo_compare(
+    waic1, waic2, waic3, waic4,
+    waic5, waic6, waic7, waic8
+  )
+)
+
+comp$Model <- rownames(comp)
+
+get_ci <- function(x){
+  q <- quantile(
+    x,
+    probs = c(0.025, 0.5, 0.975),
+    na.rm = TRUE
+  )
+
+  sprintf(
+    "%.3f [%.3f, %.3f]",
+    q[2], q[1], q[3]
+  )
+}
+
+
+m_ci <- c(
+  get_ci(post1$m_fold),
+  get_ci(post2$m_fold),
+  get_ci(post3$m_fold),
+  get_ci(post4$m_fold),
+  get_ci(post5$m_fold),
+  get_ci(post6$m_fold),
+  get_ci(post7$m_fold),
+  get_ci(post8$m_fold)
+)
+names(m_ci) <- paste0("model", 1:8)
+comp$m_fold <- m_ci[comp$Model]
+
+c_ci <- c(
+  get_ci(post1$c_fold),
+  get_ci(post2$c_fold),
+  get_ci(post3$c_fold),
+  get_ci(post4$c_fold),
+  get_ci(post5$c_fold),
+  get_ci(post6$c_fold),
+  get_ci(post7$c_fold),
+  get_ci(post8$c_fold)
+)
+names(c_ci) <- paste0("model", 1:8)
+comp$c_fold <- c_ci[comp$Model]
+
+a_ci <- c(
+  get_ci(post1$a_fold),
+  get_ci(post2$a_fold),
+  get_ci(post3$a_fold),
+  get_ci(post4$a_fold),
+  get_ci(post5$a_fold),
+  get_ci(post6$a_fold),
+  get_ci(post7$a_fold),
+  get_ci(post8$a_fold)
+)
+names(a_ci) <- paste0("model", 1:8)
+comp$a_fold <- a_ci[comp$Model]
+comp <- comp[,c(
+  "waic",
+  "elpd_diff",
+  "se_diff",
+  "a_fold",
+  "c_fold",
+  "m_fold"
+)]
+
+comp
+
+```
+
+```{r plotting the dynamics from model 4}
 library(dplyr)
 library(tidyr)
 library(deSolve)
@@ -320,14 +1041,10 @@ cv_data=as.data.frame(cv_mono)
 r <- c(median(cv_data$mu_r), median(cv_data$mu_r)+median(cv_data$delta_r))
 K <- c(median(cv_data$mu_K), median(cv_data$mu_K)+median(cv_data$delta_K))
   
-  a_sample = exp(sample(posterior_samples$log_a, sample_n))
-  c_sample = sample(posterior_samples$c_raw, sample_n)
-
-  if (salt_id==1){
-      m_sample = exp(sample(posterior_samples$log_m[, 1], sample_n))
-  }else{
-      m_sample = exp(sample(posterior_samples$log_m[, 2], sample_n))
-  }
+  a_sample = exp(sample(posterior_samples$log_a[, salt_id], sample_n))
+  c_sample = sample(posterior_samples$c_raw[, salt_id], sample_n)
+  m_sample = exp(sample(posterior_samples$log_m[, salt_id], sample_n))
+  
   df_sub=df[df$Prey== prey  & df$NaCl==salt, ]
   init=c(x1=mean(df_sub[df_sub$Day==0,]$Algae.Mean/scale_prey),
            x2=mean(df_sub[df_sub$Day==0,]$Predator.count/scale_pred)
@@ -377,12 +1094,66 @@ K <- c(median(cv_data$mu_K), median(cv_data$mu_K)+median(cv_data$delta_K))
     ggsave(gname)
 }
 
-fit=readRDS("predator_prey_Cv_fit.rds")
-cv_cont=Dynamics_Plot_Cv(fit,1, "Prey_predator_Cv_control.png")
-cv_salt=Dynamics_Plot_Cv(fit,2, "Prey_predator_Cv_salt.png")
+fit=readRDS("predator_prey_Cv_fit_new4.rds")
+#plot the predator-prey dynamics with empirical data
+cv_cont=Dynamics_Plot_Cv(fit,1, "Prey_predator_Cv_control_new_model4.png")
+cv_salt=Dynamics_Plot_Cv(fit,2, "Prey_predator_Cv_salt_new_model4.png")
+
+library(posterior)
+library(tidyverse)
+library(ggdist)
+
+draws <- as_draws_df(fit)
+pars <- c("log_a[1]", "log_a[2]", 
+        "c_raw[1]", "c_raw[2]", 
+        "log_m[1]", "log_m[2]")
+draws_long <- draws %>%
+transmute(
+a_11 = exp(`log_a[1]`),
+a_12 = exp(`log_a[2]`),
+c_11 = `c_raw[1]`,
+c_12 = `c_raw[2]`,
+m_1 = exp(`log_m[1]`),
+m_2 = exp(`log_m[2]`)
+) %>%
+pivot_longer(
+everything(),
+names_to = "parameter",
+values_to = "value"
+)
+
+
+ggplot(draws_long,
+       aes(x = value,
+           y = parameter)) +
+  stat_halfeye(fill = "#4C78A8",
+    point_interval = median_qi,
+    .width = c(.95)
+  ) +
+  scale_y_discrete(
+    labels = c(
+      a_11 = expression(a[11]),
+      a_12 = expression(a[12]),
+      c_11 = expression(c[11]),
+      c_12 = expression(c[12]),
+      m_1  = expression(m[1]),
+      m_2  = expression(m[2])
+    )
+  ) +
+  labs(x='Values', y= 'Parameters')+
+   theme_classic()+
+   theme(axis.text.x = element_text(size = 16),
+            axis.text.y = element_text(size = 18),
+            axis.title.x = element_text(size = 18),
+            axis.title.y = element_text(size=0),
+            legend.position= 'none')
+  ggsave("Posterior_cv_rotifer_bestmodel.pdf")
 ```
 
+
 ```{r Fitting Cs vs rotifer data}
+    library(tidyverse)
+library(ggdist)
 # Read the CSV file
 df <- read.csv("Prey_predator_experiment.csv")
 df <- df[df$Prey=='C.sphaeroides',]
@@ -431,14 +1202,17 @@ for (i in seq_along(samples)) {
 
 cs_mono=readRDS("Cs_mono_fit.rds")
 cs_data=as.data.frame(cs_mono)
-cv_prey_predator=as.data.frame(readRDS("predator_prey_Cv_fit.rds"))
+cv_prey_predator=readRDS("predator_prey_Cv_fit_new4.rds") # best model
+post =  rstan::extract(cv_prey_predator)
 
 r <- c(median(cs_data$mu_r), median(cs_data$mu_r)+median(cs_data$delta_r))
 K <- c(median(cs_data$mu_K), median(cs_data$mu_K)+median(cs_data$delta_K))
-m_mu <- c(mean(cv_prey_predator$`log_m[1]`), mean(cv_prey_predator$`log_m[2]`)
-    ) # log scale
-m_sigma <-c(sd(cv_prey_predator$`log_m[1]`), sd(cv_prey_predator$`log_m[2]`)
-    ) 
+
+
+m_mu <- mean(post$log_m) # mean value of m = m_1 =  m_2 from the Chlorella data
+m_sigma <-sd(post$log_m) # sd value of m = m_1 =  m_2 from the Chlorella data
+a_mu=c(mean(post$a[,1]), mean(post$a[, 4])) # mean of a's prior from the Chlorella data
+a_sigma=c(sd(post$a[,1]), sd(post$a[, 4])) # sd of a's prior from the Chlorella data
 
 # Prepare data list for Stan
 stan_data <- list(
@@ -452,12 +1226,14 @@ stan_data <- list(
   r = r,
   K = K,
   m_mu = m_mu,
-  m_sigma = m_sigma
+  m_sigma = m_sigma,
+  a_mu=a_mu,
+  a_sigma=a_sigma
 )
 
 # Run Stan model
-fit <- stan(
-  file = "predator_prey_model3.stan",
+fit_cs <- stan(
+  file = "predator_prey_model_cs.stan",
   data = stan_data,
   seed = 1,
   chains = 4,
@@ -467,131 +1243,17 @@ fit <- stan(
 )
  
  # Save fit object
- saveRDS(fit, file = "predator_prey_Cs_fit.rds")
-fit=readRDS("predator_prey_Cs_fit.rds")
-  posterior <- as.data.frame(fit)
-   
-# 
-  posterior$a2_cont= posterior$`a_row[1]`
-  posterior$a2_salt= posterior$`a_row[2]`
-  posterior$fold_a2 <- (posterior$a2_salt/ posterior$a2_cont)
+ saveRDS(fit_cs, file = "predator_prey_Cs_fit.rds")
+ 
+ 
+# read data 
+fit_cs=readRDS("predator_prey_Cs_fit.rds")
+posterior_cs <- as.data.frame(fit_cs)
+fit_cv=readRDS("predator_prey_Cv_fit_new4.rds")
+posterior_cv <- as.data.frame(fit_cv)
+# compare posterior fold change
   
-   posterior$m1= exp(posterior$`log_m[1]`)
-  posterior$m2= exp(posterior$`log_m[2]`)
-  posterior$fold_m <- (exp(posterior$`log_m[2]`)/exp(posterior$`log_m[1]`))
-#   
-  med_m1 <- median(posterior$m1)
-  ci_m1<- quantile(posterior$m1, probs = c(0.025, 0.975))
-  med_m2 <- median(posterior$m2)
-  ci_m2<- quantile(posterior$m2, probs = c(0.025, 0.975))
-   g_m=mcmc_areas(
-     posterior,
-     pars = c("m1", "m2"),
-     prob = 0.95,
-     point_est = "median"
-   ) +
-     scale_y_discrete(labels = c("w/o salt", "w/ salt")) +
-     xlab("Mortality rate (m)") +
-      annotate("text", x = 0.0, y = 0.9,
-                     label = sprintf("Median: %.2f \n 95%% CI: [%.2f, %.2f]", 
-                                     med_m1, ci_m1[1], ci_m1[2]),
-                     hjust = 0, vjust = 1, size = 6,
-                     color = "black")+
-     annotate("text", x = 0.3, y = 1.9,
-                     label = sprintf("Median: %.2f \n 95%% CI: [%.2f, %.2f]", 
-                                     med_m2, ci_m2[1], ci_m2[2]),
-                     hjust = 0, vjust = 1, size = 6,
-                     color = "black")+
-     theme_classic()+theme(
-     axis.text.x = element_text(size = 15),
-     axis.text.y = element_text(size = 18, angle=90,  hjust = -.02),
-     axis.title.x = element_text(size = 18),
-     axis.title.y = element_text(size=0),
-     legend.position = "none"
-   )
-   ggsave("Prey_predator_mortality.png")
-#   
-    med_a2_cont <- median(posterior$a2_cont)
-  ci_a2_cont<- quantile(posterior$a2_cont, probs = c(0.025, 0.975))
-  med_a2_salt <- median(posterior$a2_salt)
-  ci_a2_salt<- quantile(posterior$a2_salt, probs = c(0.025, 0.975))
-   g_a=mcmc_areas(
-     posterior,
-     pars = c("a2_cont", "a2_salt"),
-     prob = 0.95,
-     point_est = "median"
-   ) +
-     scale_y_discrete(labels = c("w/o salt", "w/ salt")) +
-     xlab("Attack rate (a2)") +
-      annotate("text", x = 1.3, y = 0.9,
-                     label = sprintf("Median: %.2f \n 95%% CI: [%.2f, %.2f]", 
-                                     med_a2_cont, ci_a2_cont[1], ci_a2_cont[2]),
-                     hjust = 0, vjust = 1, size = 6,
-                     color = "black")+
-     annotate("text", x = 0.5, y = 1.9,
-                     label = sprintf("Median: %.2f \n 95%% CI: [%.2f, %.2f]", 
-                                     med_a2_salt, ci_a2_salt[1], ci_a2_salt[2]),
-                     hjust = 0, vjust = 1, size = 6,
-                     color = "black")+
-     theme_classic()+theme(
-     axis.text.x = element_text(size = 15),
-     axis.text.y = element_text(size = 18, angle=90,  hjust = -.02),
-     axis.title.x = element_text(size = 18),
-     axis.title.y = element_text(size=0),
-     legend.position = "none"
-   )
-   ggsave("Prey_predator_attack.png")
-   
-    med_m <- median(posterior$fold_m)
- ci_m<- quantile(posterior$fold_m, probs = c(0.025, 0.975))
-  g_shift1=mcmc_areas(
-     posterior,
-     pars = c( "fold_m"),
-     prob = 0.95,
-     point_est = "median",
-   ) +
-    geom_vline(xintercept = 1, linetype = "dashed", color = "red")+
-    xlab("Fold change under salinity stress")+
-    scale_x_log10()+
-     scale_y_discrete(labels = c( "m")) +
-#    
-    annotate("text", x = 1, y = 0.9,
-                     label = sprintf("Median: %.2f \n 95%% CI: [%.2f, %.2f]", med_m, ci_m[1], ci_m[2]),
-                     hjust = 0, vjust = 1, size = 6,
-                     color = "black")+
-     theme_classic()+theme(
-     axis.text.x = element_text(size = 15),
-     axis.text.y = element_text(size = 18, angle=90,  hjust = -.02),
-     axis.title.x = element_text(size = 0),
-     axis.title.y = element_text(size=0),
-     legend.position = "none"
-   )
-   #ggsave("Prey_predator_shift_moratality.png")
-   
-   med_a2 <- median(posterior$fold_a2)
-   ci_a2<- quantile(posterior$fold_a2, probs = c(0.025, 0.975))
-   g_shift2=mcmc_areas(
-     posterior,
-     pars = c( "fold_a2"),
-     prob = 0.95,
-     point_est = "median"
-   ) +
-     geom_vline(xintercept = 1, linetype = "dashed", color = "red")+
-    xlab("Fold change under salinity stress")+
-     scale_y_discrete(labels = c( "a2")) +
-#    
-    annotate("text", x =0.1, y = 0.9,
-                     label = sprintf("Median: %.2f \n 95%% CI: [%.2f, %.2f]", med_a2, ci_a2[1], ci_a2[2]),
-                     hjust = 0, vjust = 1, size = 6,
-                     color = "black")+
-     theme_classic()+theme(
-     axis.text.x = element_text(size = 15),
-     axis.text.y = element_text(size = 18, angle=90,  hjust = -.02),
-     axis.title.x = element_text(size = 18),
-     axis.title.y = element_text(size=0),
-     legend.position = "none"
-   )
-   ggsave("Prey_predator_shift_attack.png")
+# experimental data
    
     g1=ggplot(df, aes(x=Day, y=Algae.Mean, color=Sample))+
       geom_line(linewidth=2, show.legend = FALSE)+
@@ -629,45 +1291,116 @@ fit=readRDS("predator_prey_Cs_fit.rds")
             legend.text = element_text(size = 18), 
             legend.title = element_text(size = 18),
             legend.position = "none")
-   
-   g=g1+g2+g_shift1+g_shift2+ plot_layout(ncol = 2, byrow = FALSE)+plot_annotation(tag_levels = 'A') &
+ plot_df <- bind_rows(
+  data.frame(
+    Prey = "Chlorella",
+    value = posterior_cv$a_fold
+  ),
+  data.frame(
+    Prey = "C. sphaeroides",
+    value = posterior_cs$a_fold
+  )
+)
+
+plot_df$group <- factor(
+  plot_df$Prey,
+  levels = c(
+    "Chlorella",
+    "Chlamydomonas"
+  )
+)   
+g3= ggplot(
+  plot_df,
+  aes(
+    x = value,
+    y = Prey,
+    fill = Prey
+  )
+) +
+  stat_halfeye(
+    point_interval = median_qi,
+    .width = 0.95,
+    alpha = 0.5
+  ) +
+  geom_vline(
+    xintercept = 1,
+    linetype = 2
+  ) +
+  labs(x='Fold change of feeding rate',
+       y='Prey')+
+  theme_classic()+
+  guides(
+    colour = guide_legend(nrow = 1),
+    fill   = guide_legend(nrow = 1)
+  ) +
+  theme(
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size = 18),
+    axis.title.x = element_text(size = 18),
+    axis.title.y = element_text(size = 0),
+    legend.position = "none",
+  ) +
+  scale_y_discrete(
+  labels = c(expression(italic(C.~sphaeroides)),
+    expression(italic(Chlorella))
+    
+  )
+)
+
+  g=(g1/g2)|g3+ plot_layout(ncol = 2, widths = c(4, 1), byrow = FALSE)+plot_annotation(tag_levels = 'A') &
   theme(plot.tag = element_text(size = 24))
    ggsave("Figure4.png")
+   
+delta <- posterior_cs$a_fold - posterior_cv$a_fold
+
+# 95%CI
+print(quantile(delta, c(0.025, 0.5, 0.975)))
+# P(delta < 0)
+print(mean(delta < 0) )
+   
 ```
 
-```{r}
-Dynamics_Plot2=function(fit, salt_id, gname){
-  
+```{r plotting the empirical dynamics and the posterior: Cs-rotifer}
+library(dplyr)
+library(tidyr)
+library(deSolve)
+
+LV=function(t, x, parm){
+  with(as.list(c(x, parm)),{
+    dx1=r*x1*(1-x1/K)-a*x1*x2
+    dx2=x2*(b*a*x1-m)
+    return(list(c(dx1, dx2)))
+  })
+}
+
+Dynamics_Plot_Cs=function(fit, salt_id, gname){
+  # Plot the Cs fitting
   prey="C.sphaeroides"
-  
   if(salt_id==1){
     salt=0
   }else{
     salt=0.06
   }
-
   #Posterior sampling
   sample_n=1000
   posterior_samples=rstan::extract(fit)
+ df <- read.csv("Prey_predator_experiment.csv")
+ scale_prey=1e7
+ scale_pred=1e3
+ # Use the median value of the posterior distribution for r and K
+cs_mono=readRDS("Cs_mono_fit.rds")
+cs_data=as.data.frame(cs_mono)
 
-    c_sample = sample(posterior_samples$c_raw, sample_n)
-    if(salt_id==1){
-      a_sample = sample(posterior_samples$a_row[, 1], sample_n)
-      m_sample = exp(sample(posterior_samples$log_m[, 1], sample_n))
-    }else{
-      a_sample = sample(posterior_samples$a_row[, 2], sample_n)
-      m_sample = exp(sample(posterior_samples$log_m[, 2], sample_n))
-      }
+
+r <- c(median(cs_data$mu_r), median(cs_data$mu_r)+median(cs_data$delta_r))
+K <- c(median(cs_data$mu_K), median(cs_data$mu_K)+median(cs_data$delta_K))
   
-  df= read.csv("Prey_predator_experiment.csv")
+
+a_sample = sample(posterior_samples$a_row[, salt_id], sample_n) 
+  c_sample = sample(posterior_samples$c_raw, sample_n)
+  m_sample = exp(sample(posterior_samples$log_m, sample_n))
+  
   df_sub=df[df$Prey== prey  & df$NaCl==salt, ]
-  cs_mono=readRDS("Cs_mono_fit.rds")
-  cs_data=as.data.frame(cv_mono)
-  scale_prey=1e7
-  sclae_pred=1e3
-  r <- c(median(cs_data$mu_r), median(cs_data$mu_r)+median(cs_data$delta_r))
-  K <- c(median(cs_data$mu_K), median(cs_data$mu_K)+median(cs_data$delta_K))
-  
   init=c(x1=mean(df_sub[df_sub$Day==0,]$Algae.Mean/scale_prey),
            x2=mean(df_sub[df_sub$Day==0,]$Predator.count/scale_pred)
   )
@@ -675,10 +1408,10 @@ Dynamics_Plot2=function(fit, salt_id, gname){
     for(i in 1:sample_n){
       out=ode(y=init,times=unique(df_sub$Day),func=LV,
               parm=list(r=r[salt_id], K=K[salt_id], 
-                        a=a_sample[i], b=c_sample[i],  m=m_sample[i])
-                        )
+                        a=a_sample[i], b=c_sample[i],  m=m_sample[i]
+                        ))
       outdf_add=data.frame(out)
-      outdf_add$x1=outdf_add$x1*scale_prey
+      outdf_add$x1=outdf_add$x1*scale_prey[1]
       outdf_add$x2=outdf_add$x2*scale_pred
       outdf_add$Sample=sprintf('Simulation%d',i)
       if (i==1){
@@ -692,7 +1425,7 @@ Dynamics_Plot2=function(fit, salt_id, gname){
     g1=ggplot(df_exp, aes(x=time, y=x1, color=Sample))+geom_line(linewidth=2)+geom_point(size=3)+
       xlab('Time (day)')+ylab("Green algae (/ml)")+
       scale_x_continuous(breaks=c(0,3,6,9))+
-      scale_y_log10(labels = trans_format("log10", math_format(10^.x)), breaks=c(1e5, 1e6, 1e7)) +
+      scale_y_log10(labels = trans_format("log10", math_format(10^.x)), breaks=c(10^6, 10^7, 10^8)) +
       theme_classic()+
       theme(axis.text.x = element_text(size = 12),
             axis.text.y = element_text(size = 12),
@@ -703,7 +1436,7 @@ Dynamics_Plot2=function(fit, salt_id, gname){
     g2=ggplot(df_exp, aes(x=time, y=x2, color=Sample))+geom_line(linewidth=2)+geom_point(size=3)+
       xlab('Time (day)')+ylab(TeX(' Rotifers  (/ml)'))+
       scale_x_continuous(breaks=c(0,3,6,9))+
-       scale_y_log10(labels = trans_format("log10", math_format(10^.x)), breaks=c(1, 10, 100, 1000)) +
+       scale_y_log10(labels = trans_format("log10", math_format(10^.x)), breaks=c(1, 10^1, 10^2, 10^3)) +
       theme_classic()+
       theme(axis.text.x = element_text(size = 12),
             axis.text.y = element_text(size = 12),
@@ -717,37 +1450,52 @@ Dynamics_Plot2=function(fit, salt_id, gname){
 }
 
 fit=readRDS("predator_prey_Cs_fit.rds")
-cs_cont=Dynamics_Plot2(fit, 1, "Prey_predator_Cs_control.png")
-cs_salt=Dynamics_Plot2(fit, 2, "Prey_predator_Cs_salt.png")
+#plot the predator-prey dynamics with empirical data
+cs_cont=Dynamics_Plot_Cs(fit,1, "Prey_predator_Cs_control.png")
+cs_salt=Dynamics_Plot_Cs(fit,2, "Prey_predator_Cs_salt.png")
 
-```
+library(posterior)
+library(tidyverse)
+library(ggdist)
 
-```{r Additional figures}
-# parameter intervals
-cv_prey_predator=readRDS("predator_prey_Cv_fit.rds")
-g_cv=mcmc_intervals(cv_prey_predator, par=c("a[1]", "m[1]", "m[4]", "c_raw"), prob=0.95, prob_outer=0.95)+
-  xlab('Values')+ylab("Parameter")+
-  scale_y_discrete(labels=c("a1", "m1", "m2", "c1"))+
-  theme_classic()+
-      theme(axis.text.x = element_text(size = 15),
-            axis.text.y = element_text(size = 15),
+draws <- as_draws_df(fit)
+pars <- c("a_row[1]", "a_row[2]", 
+        "c_raw", "log_m")
+draws_long <- draws %>%
+transmute(
+a_21 = `a_row[1]`,
+a_22 = `a_row[2]`,
+c_2 = `c_raw`,
+m = exp(`log_m`)
+) %>%
+pivot_longer(
+everything(),
+names_to = "parameter",
+values_to = "value"
+)
+
+
+ggplot(draws_long,
+       aes(x = value,
+           y = parameter)) +
+  stat_halfeye(fill = "#4C78A8",
+    point_interval = median_qi,
+    .width = c(.95)
+  ) +
+  scale_y_discrete(
+    labels = c(
+      a_21 = expression(a[21]),
+      a_22 = expression(a[22]),
+      c_2 = expression(c[2]),
+      m  = expression(m)
+    )
+  ) +
+  labs(x='Values', y= 'Parameters')+
+   theme_classic()+
+   theme(axis.text.x = element_text(size = 16),
+            axis.text.y = element_text(size = 18),
             axis.title.x = element_text(size = 18),
-            axis.title.y = element_text(size=18),
+            axis.title.y = element_text(size=0),
             legend.position= 'none')
-ggsave("parm_intervals_cv_prey_predator.png")
-
-cs_prey_predator=readRDS("predator_prey_Cs_fit.rds")
-g_cs=mcmc_intervals(cs_prey_predator, par=c("a_row[1]","a_row[2]", "m[4]", "m[1]", "c_raw"), prob=0.95, prob_outer=0.95)+
-  xlab('Values')+ylab("Parameter")+
-  scale_y_discrete(labels=c("a21","a22" , "m1", "m2", "c2"))+
-  theme_classic()+
-      theme(axis.text.x = element_text(size = 15),
-            axis.text.y = element_text(size = 15),
-            axis.title.x = element_text(size = 18),
-            axis.title.y = element_text(size=18),
-            legend.position= 'none')
-ggsave("parm_intervals_cs_prey_predator.png")
-
-
-
+  ggsave("Posterior_cs_rotifer_bestmodel.pdf")
 ```
